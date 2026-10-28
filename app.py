@@ -118,14 +118,17 @@ with tab_main:
 
         data = next(item for item in st.session_state.resignations_db if item["id"] == selected_id)
 
-        exp_days = (data['resignation_date'] - data['hiring_date']).days
+        # Calculation of Total Experience based on Last Working Day - Hiring Date
+        exp_days = (data['last_working_day'] - data['hiring_date']).days
+        if exp_days < 0:
+            exp_days = 0
+
         h_date = data['hiring_date'].strftime("%d/%m/%Y")
         r_date = data['resignation_date'].strftime("%d/%m/%Y")
         l_date = data['last_working_day'].strftime("%d/%m/%Y")
         r_date_header = data['resignation_date'].strftime("%d %b %Y")
         mgr_first = data['direct_manager'].split()[0] if data['direct_manager'] else 'Manager'
 
-        # Photo HTML Component
         if data.get('photo_b64'):
             img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:55px; height:55px; border-radius:6px; object-fit:cover;" />'
         else:
@@ -250,7 +253,7 @@ with tab_main:
                 
                 <div style="display:flex; gap:6px; text-align:center;">
                     <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">👤</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Joined</div><div style="font-size:11px;">{h_date}</div></div>
-                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">🏆</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Experience</div><div style="font-size:11px;">{exp_days} Days</div></div>
+                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">🏆</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Total Experience</div><div style="font-size:11px;">{exp_days} Days</div></div>
                     <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">📄</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Submitted</div><div style="font-size:11px;">{r_date}</div></div>
                     <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">🕒</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Notice Period</div><div style="font-size:11px;">{data["notice_period"]}</div></div>
                     <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">✅</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Finalized</div><div style="font-size:11px;">Approved {r_date}</div></div>
@@ -323,7 +326,6 @@ with tab_manage:
                 st.rerun()
 
     else:
-        # Default Empty values for NEW resignation, pre-filled for EDIT
         if action_type == "تعديل بيانات استقالة ✏️" and st.session_state.resignations_db:
             edit_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
             edit_id = st.selectbox("اختر الموظف المراد تعديل بياناته:", options=list(edit_options.keys()), format_func=lambda x: edit_options[x])
@@ -338,7 +340,7 @@ with tab_manage:
                 "hiring_date": date.today(),
                 "resignation_date": date.today(),
                 "last_working_day": date.today(),
-                "net_pay": None,
+                "net_pay": 0,
                 "reason": "",
                 "direct_manager": "",
                 "notice_period": "",
@@ -348,24 +350,32 @@ with tab_manage:
                 "photo_b64": None
             }
 
+        # Form with EMPTY placeholders
         with st.form("resignation_form"):
             col1, col2 = st.columns(2)
             
             with col1:
-                emp_name = to_english_str(st.text_input("اسم الموظف (Employee Name)", value=target_data['employee_name'], placeholder="e.g. Abu Bakr Mahmoud"))
-                job_title = to_english_str(st.text_input("المسمى الوظيفي (Job Title)", value=target_data['job_title'], placeholder="e.g. Sales Casual"))
-                branch = to_english_str(st.text_input("اسم الفرع (Branch)", value=target_data['branch'], placeholder="e.g. Park-St Branch"))
-                grading = to_english_str(st.text_input("الدرجة الوظيفية (Grading System)", value=target_data['grading'], placeholder="e.g. G1 - L1"))
-                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", value=target_data['direct_manager'], placeholder="e.g. Sherif S. El-Sayed"))
-                reason = to_english_str(st.text_input("سبب الاستقالة (Reason for Leaving)", value=target_data['reason'], placeholder="e.g. Education"))
+                emp_name = to_english_str(st.text_input("اسم الموظف (Employee Name)", value=target_data['employee_name']))
+                job_title = to_english_str(st.text_input("المسمى الوظيفي (Job Title)", value=target_data['job_title']))
+                branch = to_english_str(st.text_input("اسم الفرع (Branch)", value=target_data['branch']))
+                grading = to_english_str(st.text_input("الدرجة الوظيفية (Grading System)", value=target_data['grading']))
+                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", value=target_data['direct_manager']))
+                reason = to_english_str(st.text_input("سبب الاستقالة (Reason for Leaving)", value=target_data['reason']))
                 
             with col2:
                 hiring_date = st.date_input("تاريخ التعيين (Hiring Date)", value=target_data['hiring_date'])
                 resignation_date = st.date_input("تاريخ تقديم الاستقالة (Resignation Date)", value=target_data['resignation_date'])
                 last_working_day = st.date_input("آخر يوم عمل (Last Working Day)", value=target_data['last_working_day'])
-                net_pay = st.number_input("إجمالي المستحقات (Total Net Pay EGP)", value=int(target_data['net_pay']) if target_data['net_pay'] is not None else 0, step=500)
-                notice_period = to_english_str(st.text_input("فترة الإشعار (Notice Period Status)", value=target_data['notice_period'], placeholder="e.g. One Month"))
-                handover_status = to_english_str(st.text_input("حالة التسليم (Handover Status)", value=target_data['handover_status'], placeholder="e.g. Team Leader"))
+                
+                # Dynamic calculation display for Total Experience
+                calculated_exp = (last_working_day - hiring_date).days
+                if calculated_exp < 0:
+                    calculated_exp = 0
+                st.info(f"🏆 إجمالي فترة الخبرة (Total Experience): **{calculated_exp} يوم** (تحسب تلقائياً من تاريخ التعيين وآخر يوم عمل)")
+                
+                net_pay = st.number_input("إجمالي المستحقات (Total Net Pay EGP)", value=int(target_data['net_pay']), step=500)
+                notice_period = to_english_str(st.text_input("فترة الإشعار (Notice Period Status)", value=target_data['notice_period']))
+                handover_status = to_english_str(st.text_input("حالة التسليم (Handover Status)", value=target_data['handover_status']))
 
             col3, col4 = st.columns(2)
             with col3:
@@ -377,7 +387,6 @@ with tab_manage:
             save_btn = st.form_submit_button("💾 حفظ البيانات والتحديث", type="primary")
 
             if save_btn:
-                # Convert uploaded photo to Base64
                 if uploaded_photo is not None:
                     photo_b64 = base64.b64encode(uploaded_photo.getvalue()).decode()
                 else:
@@ -425,16 +434,19 @@ with tab_dashboard:
     else:
         records = []
         for r in st.session_state.resignations_db:
-            exp = (r['resignation_date'] - r['hiring_date']).days
+            exp = (r['last_working_day'] - r['hiring_date']).days
+            if exp < 0:
+                exp = 0
             records.append({
                 "اسم الموظف": r['employee_name'],
                 "الفرع": r['branch'],
                 "المسمى الوظيفي": r['job_title'],
-                "تاريخ الاستقالة": r['resignation_date'].strftime("%Y-%m-%d"),
+                "تاريخ التعيين": r['hiring_date'].strftime("%Y-%m-%d"),
+                "آخر يوم عمل": r['last_working_day'].strftime("%Y-%m-%d"),
+                "فترة الخبرة (يوم)": exp,
                 "إجمالي المستحقات (EGP)": r['net_pay'],
                 "سبب الاستقالة": r['reason'],
-                "المدير المباشر": r['direct_manager'],
-                "الخبرة (يوم)": exp
+                "المدير المباشر": r['direct_manager']
             })
         
         df = pd.DataFrame(records)
@@ -443,7 +455,7 @@ with tab_dashboard:
         m1.metric("إجمالي الاستقالات", len(df))
         m2.metric("عدد الفروع", df['الفرع'].nunique())
         m3.metric("إجمالي المستحقات (EGP)", f"{df['إجمالي المستحقات (EGP)'].sum():,}")
-        m4.metric("متوسط الخبرة (يوم)", f"{int(df['الخبرة (يوم)'].mean())} يوم")
+        m4.metric("متوسط الخبرة (يوم)", f"{int(df['فترة الخبرة (يوم)'].mean())} يوم")
 
         st.markdown("---")
 
