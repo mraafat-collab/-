@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+import streamlit.components.v1 as components
 
 # ---------------------------------------------------------
 # Page Configuration
@@ -12,7 +13,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# Custom CSS (Glowing Tab Rectangles & Clean A4 Styling)
+# Custom CSS for App & Top Tabs Styling
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -26,25 +27,25 @@ st.markdown("""
         background-color: #F8F6F0;
     }
 
-    /* Glowing Rectangular Top Tabs */
+    /* Rectangular Glowing Top Navigation Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 12px;
         background-color: transparent;
-        padding-bottom: 15px;
+        padding-bottom: 12px;
         border-bottom: 2px solid #EADBCE;
     }
     
     .stTabs [data-baseweb="tab"] {
-        height: 48px;
+        height: 46px;
         background-color: #FFFFFF;
         border-radius: 8px;
         color: #8C5A2B;
         font-weight: 700;
         font-size: 15px;
         border: 1.5px solid #D6C2A7;
-        padding: 0px 20px;
-        box-shadow: 0px 2px 5px rgba(0,0,0,0.03);
-        transition: all 0.25s ease-in-out;
+        padding: 0px 22px;
+        box-shadow: 0px 2px 4px rgba(0,0,0,0.03);
+        transition: all 0.2s ease-in-out;
     }
     
     .stTabs [data-baseweb="tab"]:hover {
@@ -53,94 +54,12 @@ st.markdown("""
         transform: translateY(-2px);
     }
     
-    /* Active Highlight Button */
     .stTabs [aria-selected="true"] {
         background-color: #8C5A2B !important;
         color: #FFFFFF !important;
         border-color: #8C5A2B !important;
-        box-shadow: 0px 4px 14px rgba(140, 90, 43, 0.45) !important;
+        box-shadow: 0px 4px 12px rgba(140, 90, 43, 0.4) !important;
         transform: translateY(-2px);
-    }
-
-    /* Print Setup for A4 */
-    @media print {
-        @page {
-            size: A4 portrait;
-            margin: 6mm;
-        }
-        body * {
-            visibility: hidden;
-        }
-        #printable-area, #printable-area * {
-            visibility: visible;
-        }
-        #printable-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-        }
-        .no-print {
-            display: none !important;
-        }
-    }
-
-    /* Approval Card Container */
-    .a4-card {
-        background-color: #FAF8F5;
-        border: 1.5px solid #D6C2A7;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 0 auto;
-        max-width: 820px;
-        box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
-    }
-
-    /* Badges & Metrics */
-    .metric-badge {
-        background-color: #8C5A2B;
-        color: white;
-        border-radius: 14px;
-        padding: 4px 8px;
-        text-align: center;
-        font-weight: 700;
-        font-size: 11px;
-        margin-bottom: 4px;
-    }
-    .metric-box {
-        background-color: #FAF8F5;
-        border: 1px solid #D6C2A7;
-        border-radius: 6px;
-        padding: 6px;
-        text-align: center;
-        font-weight: 800;
-        font-size: 13px;
-        color: #111;
-    }
-
-    /* Styled Table */
-    .custom-table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 10px;
-        border: 1px solid #D6C2A7;
-    }
-    .custom-table th {
-        background-color: #8C5A2B;
-        color: white;
-        padding: 6px 10px;
-        text-align: left;
-        font-size: 12px;
-        font-weight: 700;
-    }
-    .custom-table td {
-        padding: 5px 10px;
-        border-bottom: 1px solid #EADBCE;
-        font-size: 12px;
-        color: #222;
-    }
-    .custom-table tr:nth-child(even) {
-        background-color: #FAF8F5;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -154,7 +73,7 @@ def to_english_str(text):
     trans = str.maketrans(arabic_num, english_num)
     return str(text).translate(trans)
 
-# Database Initialization
+# Initializing Session Database
 if 'resignations_db' not in st.session_state:
     st.session_state.resignations_db = [
         {
@@ -177,7 +96,7 @@ if 'resignations_db' not in st.session_state:
     ]
 
 # ---------------------------------------------------------
-# Top Navigation Bar (Rectangular Tabs)
+# Top Navigation Bar (Glowing Tabs)
 # ---------------------------------------------------------
 tab_main, tab_manage, tab_dashboard = st.tabs([
     "🏠 عرض وطباعة الاستقالة (A4)", 
@@ -192,14 +111,8 @@ with tab_main:
     if not st.session_state.resignations_db:
         st.warning("⚠️ لا توجد بيانات استقالات مسجلة حالياً.")
     else:
-        top_col1, top_col2 = st.columns([3, 1])
-        with top_col1:
-            emp_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
-            selected_id = st.selectbox("اختر الموظف لعرض طلب الاستقالة الخاصة به:", options=list(emp_options.keys()), format_func=lambda x: emp_options[x])
-        with top_col2:
-            st.write("")
-            st.write("")
-            st.markdown('<button onclick="window.print()" style="background-color:#8C5A2B; color:white; border:none; padding:10px 16px; border-radius:8px; font-weight:bold; cursor:pointer; width:100%;">🖨️ طباعة / حفظ A4 PDF</button>', unsafe_allow_html=True)
+        emp_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
+        selected_id = st.selectbox("اختر الموظف لعرض طلب الاستقالة الخاصة به:", options=list(emp_options.keys()), format_func=lambda x: emp_options[x])
 
         data = next(item for item in st.session_state.resignations_db if item["id"] == selected_id)
 
@@ -208,19 +121,111 @@ with tab_main:
         r_date = data['resignation_date'].strftime("%d/%m/%Y")
         l_date = data['last_working_day'].strftime("%d/%m/%Y")
         r_date_header = data['resignation_date'].strftime("%d %b %Y")
+        mgr_first = data['direct_manager'].split()[0] if data['direct_manager'] else 'Manager'
 
-        st.markdown('<div id="printable-area">', unsafe_allow_html=True)
-        
-        with st.container():
-            st.markdown(f'''
+        # Full Render Engine inside Iframe (Guarantees Working Print & HTML Rendering)
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+                body {{
+                    font-family: 'Inter', sans-serif;
+                    background-color: #F8F6F0;
+                    margin: 0;
+                    padding: 10px;
+                }}
+                .print-btn {{
+                    background-color: #8C5A2B;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    cursor: pointer;
+                    margin-bottom: 15px;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 8px;
+                    box-shadow: 0px 2px 6px rgba(0,0,0,0.15);
+                }}
+                .print-btn:hover {{
+                    background-color: #704721;
+                }}
+                .a4-card {{
+                    background-color: #FAF8F5;
+                    border: 1.5px solid #D6C2A7;
+                    border-radius: 12px;
+                    padding: 20px;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
+                }}
+                .custom-table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 10px;
+                    border: 1px solid #D6C2A7;
+                }}
+                .custom-table th {{
+                    background-color: #8C5A2B;
+                    color: white;
+                    padding: 6px 10px;
+                    text-align: left;
+                    font-size: 12px;
+                    font-weight: 700;
+                }}
+                .custom-table td {{
+                    padding: 5px 10px;
+                    border-bottom: 1px solid #EADBCE;
+                    font-size: 12px;
+                    color: #222;
+                }}
+                .custom-table tr:nth-child(even) {{
+                    background-color: #FAF8F5;
+                }}
+                .metric-badge {{
+                    background-color: #8C5A2B;
+                    color: white;
+                    border-radius: 14px;
+                    padding: 4px 8px;
+                    text-align: center;
+                    font-weight: 700;
+                    font-size: 11px;
+                    margin-bottom: 4px;
+                }}
+                .metric-box {{
+                    background-color: #FAF8F5;
+                    border: 1px solid #D6C2A7;
+                    border-radius: 6px;
+                    padding: 6px;
+                    text-align: center;
+                    font-weight: 800;
+                    font-size: 13px;
+                    color: #111;
+                }}
+                @media print {{
+                    .no-print {{ display: none !important; }}
+                    body {{ background: white; padding: 0; }}
+                    .a4-card {{ border: none; box-shadow: none; width: 100%; max-width: 100%; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div style="text-align: right;" class="no-print">
+                <button onclick="window.print()" class="print-btn">🖨️ طباعة / حفظ A4 PDF</button>
+            </div>
+
             <div class="a4-card">
                 <table style="width:100%; border:none; margin-bottom:10px;">
                     <tr>
-                        <td style="width:60%; vertical-align:top; border:none;">
-                            <div style="color:#8C5A2B; font-size:15px; font-weight:700;">Dear Mr. {data['direct_manager'].split()[0] if data['direct_manager'] else 'Manager'},</div>
+                        <td style="width:58%; vertical-align:top; border:none;">
+                            <div style="color:#8C5A2B; font-size:15px; font-weight:700;">Dear Mr. {mgr_first},</div>
                             <div style="color:#8C5A2B; font-weight:800; font-size:24px; line-height:1.1;">RESIGNATION<br>APPROVAL REQUEST</div>
                         </td>
-                        <td style="width:40%; vertical-align:top; border:none;">
+                        <td style="width:42%; vertical-align:top; border:none;">
                             <div style="background:#FAF8F5; border:1px solid #D6C2A7; border-radius:8px; padding:8px; display:flex; gap:10px; align-items:center;">
                                 <div style="width:50px; height:50px; background:#EADBCE; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:24px;">👤</div>
                                 <div>
@@ -278,16 +283,20 @@ with tab_main:
                     <div style="color:#8C5A2B; font-weight:800; font-size:13px;">MANAGER ACTION ITEMS</div>
                     <div style="color:#8C5A2B; font-weight:700; font-size:11px; margin-bottom:6px;">Resignation Next Steps</div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px;">
-                        <div>🧮 Calculate final dues payout ({data['net_pay']} EGP).</div>
-                        <div>🤝 Facilitate handover process with {data['handover_status']}.</div>
+                        <div>🧮 Calculate final dues payout ({data['net_pay']} EGP). Ensure 'Total Net to pay {data['net_pay']} EGP' is correct.</div>
+                        <div>🤝 Facilitate handover process with {data['handover_status']} and new point of contact.</div>
                         <div>🕒 Review notice period waiver request ({data['notice_period']}).</div>
                         <div>📦 Schedule property return (laptop, badge, keys).</div>
+                        <div>📑 Issue final acceptance letter and experience certificate.</div>
                     </div>
                 </div>
             </div>
-            ''', unsafe_allow_html=True)
-
-        st.markdown('</div>', unsafe_allow_html=True)
+        </body>
+        </html>
+        """
+        
+        # Render Component
+        components.html(html_content, height=880, scrolling=True)
 
 # ---------------------------------------------------------
 # TAB 2: EDIT & MANAGE RESIGNATIONS
