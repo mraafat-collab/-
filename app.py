@@ -1,644 +1,522 @@
-import streamlit as st
-import pandas as pd
-from datetime import date
-import streamlit.components.v1 as components
-import base64
-import io
-import smtplib
+"""
+Pro Resignation Approval System  (Streamlit)
+Run:      streamlit run resignation_pro.py
+Install:  pip install streamlit pandas python-docx xlsxwriter
+
+Optional .streamlit/secrets.toml:
+    APP_PASSWORD = "choose-a-password"     # enables login screen
+    SMTP_HOST = "smtp.gmail.com"
+    SMTP_USER = "you@company.com"
+    SMTP_PASS = "app-password"
+"""
+import base64, hmac, html, io, json, os, smtplib, sqlite3
+from datetime import date, datetime, timedelta
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import pandas as pd
+import streamlit as st
+import streamlit.components.v1 as components
 from docx import Document
 
-# ---------------------------------------------------------
-# Page Configuration
-# ---------------------------------------------------------
-st.set_page_config(
-    page_title="Resignation Approval System",
-    page_icon="📄",
-    layout="wide"
-)
+DB_PATH = os.getenv("RESIGN_DB", "resignations.db")
+STATUSES = ["Pending", "Approved", "Rejected"]
+STATUS_COLOR = {"Pending": "#C98A1B", "Approved": "#2E7D32", "Rejected": "#B3261E"}
+NOTICE = {"Waived / None": 0, "2 Weeks": 14, "One Month": 30, "Two Months": 60}
+CHECKLIST = ["Laptop / equipment returned", "ID badge returned", "Keys returned",
+             "System access revoked", "Knowledge handover done",
+             "Exit interview done", "Final dues approved by HR"]
+EARLY_LEAVER_DAYS = 90
 
-# ---------------------------------------------------------
-# Custom CSS for Top Navigation Tabs
-# ---------------------------------------------------------
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        background-color: #F8F6F0;
-    }
-    .stApp {
-        background-color: #F8F6F0;
-    }
+st.set_page_config(page_title="Resignation Approval System", page_icon="📄", layout="wide")
 
-    /* Glowing Rectangular Top Navigation Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 12px;
-        background-color: transparent;
-        padding-bottom: 12px;
-        border-bottom: 2px solid #EADBCE;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        height: 46px;
-        background-color: #FFFFFF;
-        border-radius: 8px;
-        color: #8C5A2B;
-        font-weight: 700;
-        font-size: 15px;
-        border: 1.5px solid #D6C2A7;
-        padding: 0px 22px;
-        box-shadow: 0px 2px 4px rgba(0,0,0,0.03);
-        transition: all 0.2s ease-in-out;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        border-color: #8C5A2B;
-        color: #8C5A2B;
-        transform: translateY(-2px);
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #8C5A2B !important;
-        color: #FFFFFF !important;
-        border-color: #8C5A2B !important;
-        box-shadow: 0px 4px 12px rgba(140, 90, 43, 0.4) !important;
-        transform: translateY(-2px);
-    }
-</style>
-""", unsafe_allow_html=True)
 
-# Helper Function
+# ----------------------------------------------------------------- helpers
+def secret(name, default=""):
+    try:
+        return st.secrets.get(name, os.getenv(name, default))
+    except Exception:
+        return os.getenv(name, default)
+
+
 def to_english_str(text):
-    if not text:
-        return ""
-    arabic_num = "٠١٢٣٤٥٦٧٨٩"
-    english_num = "0123456789"
-    trans = str.maketrans(arabic_num, english_num)
-    return str(text).translate(trans)
+    return str(text or "").translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).strip()
 
-# Helper for Word (.docx)
-def generate_word_doc(data, exp_days):
+
+def esc(v):
+    return html.escape(str(v if v is not None else ""))
+
+
+def D(s):
+    return date.fromisoformat(s) if isinstance(s, str) else s
+
+
+def fmt(s, f="%d/%m/%Y"):
+    return D(s).strftime(f)
+
+
+# ---------------------------------------------------------------- database
+def run(sql, args=(), fetch=None):
+    con = sqlite3.connect(DB_PATH)
+    con.row_factory = sqlite3.Row
+    try:
+        cur = con.execute(sql, args)
+        con.commit()
+        if fetch == "all":
+            return [dict(r) for r in cur.fetchall()]
+        if fetch == "one":
+            r = cur.fetchone()
+            return dict(r) if r else None
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def init_db():
+    run("""CREATE TABLE IF NOT EXISTS resignations(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, recipient_name TEXT, employee_name TEXT,
+        employee_code TEXT, job_title TEXT, branch TEXT, grading TEXT,
+        hiring_date TEXT, resignation_date TEXT, last_working_day TEXT,
+        final_dues REAL DEFAULT 0, loan_balance REAL DEFAULT 0, other_deductions REAL DEFAULT 0,
+        reason TEXT, direct_manager TEXT, notice_period TEXT, handover_status TEXT,
+        absence_days INTEGER DEFAULT 0, status TEXT DEFAULT 'Pending', manager_comment TEXT,
+        checklist TEXT DEFAULT '[]', photo BLOB, created_at TEXT, updated_at TEXT)""")
+    run("""CREATE TABLE IF NOT EXISTS audit(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, rid INTEGER, action TEXT, detail TEXT, ts TEXT)""")
+    if not run("SELECT COUNT(*) n FROM resignations", fetch="one")["n"]:
+        save(dict(recipient_name="Mohamed", employee_name="Abu Bakr Muhammad Mahmoud",
+                  employee_code="E-1001", job_title="Sales Casual", branch="Park-St Branch",
+                  grading="G1 - L1", hiring_date="2026-10-03", resignation_date="2026-10-20",
+                  last_working_day="2026-10-20", final_dues=7000, loan_balance=0,
+                  other_deductions=0, reason="Education", direct_manager="Sherif S. El-Sayed",
+                  notice_period="One Month", handover_status="Team Leader", absence_days=0,
+                  status="Pending", manager_comment="", checklist="[]"))
+
+
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def log(rid, action, detail=""):
+    run("INSERT INTO audit(rid,action,detail,ts) VALUES(?,?,?,?)", (rid, action, detail, now()))
+
+
+def get_all():
+    return run("SELECT * FROM resignations ORDER BY id DESC", fetch="all")
+
+
+def get_one(rid):
+    return run("SELECT * FROM resignations WHERE id=?", (rid,), fetch="one")
+
+
+def save(rec, rid=None):
+    rec = dict(rec, updated_at=now())
+    if rid:
+        run(f"UPDATE resignations SET {', '.join(c + '=?' for c in rec)} WHERE id=?", [*rec.values(), rid])
+        log(rid, "Edited", rec.get("employee_name", ""))
+        return rid
+    rec["created_at"] = now()
+    new = run(f"INSERT INTO resignations({','.join(rec)}) VALUES({','.join('?' * len(rec))})", list(rec.values()))
+    log(new, "Created", rec.get("employee_name", ""))
+    return new
+
+
+# ------------------------------------------------------------ calculations
+def calc(d):
+    hire, res, last = D(d["hiring_date"]), D(d["resignation_date"]), D(d["last_working_day"])
+    notice_days = NOTICE.get(d["notice_period"], 0)
+    required_last = res + timedelta(days=notice_days)
+    recipient = (d.get("recipient_name") or "").strip() or "Manager"
+    if not recipient.lower().startswith(("mr.", "ms.", "mrs.")):
+        recipient = f"Mr. {recipient}"
+    return dict(
+        exp=max((last - hire).days, 0),
+        net=(d["final_dues"] or 0) - (d["loan_balance"] or 0) - (d["other_deductions"] or 0),
+        required_last=required_last,
+        shortfall=max((required_last - last).days, 0),
+        recipient=recipient,
+        done=json.loads(d.get("checklist") or "[]"),
+    )
+
+
+def rows_for(d, c):
+    return [("Employee Name", d["employee_name"]), ("Employee Code", d["employee_code"]),
+            ("Branch", d["branch"]), ("Job Title", d["job_title"]), ("Grading", d["grading"]),
+            ("Hiring Date", fmt(d["hiring_date"])), ("Resignation Date", fmt(d["resignation_date"])),
+            ("Last Working Day", fmt(d["last_working_day"])), ("Total Experience", f"{c['exp']} Days"),
+            ("Notice Period", d["notice_period"]),
+            ("Notice Shortfall", f"{c['shortfall']} Days" if c["shortfall"] else "None"),
+            ("Final Dues (EGP)", f"{d['final_dues']:,.0f}"), ("Loan Deduction (EGP)", f"{d['loan_balance']:,.0f}"),
+            ("Other Deductions (EGP)", f"{d['other_deductions']:,.0f}"), ("Total Net Pay (EGP)", f"{c['net']:,.0f}"),
+            ("Reason for Leaving", d["reason"]), ("Direct Manager", d["direct_manager"]),
+            ("Handover To", d["handover_status"]), ("Absence During Year", f"{d['absence_days']} Days"),
+            ("Status", d["status"]), ("Manager Comment", d["manager_comment"] or "-")]
+
+
+# ----------------------------------------------------------------- exports
+def make_docx(d, c, company):
     doc = Document()
-    doc.add_heading(f"RESIGNATION APPROVAL REQUEST - {data['employee_name']}", 0)
-    
-    doc.add_paragraph(f"Recipient: Dear {data.get('recipient_name', 'Manager')}")
-    doc.add_paragraph(f"Employee Name: {data['employee_name']}")
-    doc.add_paragraph(f"Job Title: {data['job_title']}")
-    doc.add_paragraph(f"Branch: {data['branch']}")
-    doc.add_paragraph(f"Hiring Date: {data['hiring_date'].strftime('%d/%m/%Y')}")
-    doc.add_paragraph(f"Resignation Date: {data['resignation_date'].strftime('%d/%m/%Y')}")
-    doc.add_paragraph(f"Last Working Day: {data['last_working_day'].strftime('%d/%m/%Y')}")
-    doc.add_paragraph(f"Total Experience: {exp_days} Days")
-    doc.add_paragraph(f"Total Net Pay: {data['net_pay']} EGP")
-    doc.add_paragraph(f"Reason for Leaving: {data['reason']}")
-    doc.add_paragraph(f"Direct Manager: {data['direct_manager']}")
-    doc.add_paragraph(f"Notice Period Status: {data['notice_period']}")
-    doc.add_paragraph(f"Handover Status: {data['handover_status']}")
-    
+    doc.add_heading(f"{company} - Resignation Approval Request", 0)
+    doc.add_paragraph(f"Dear {c['recipient']},")
+    t = doc.add_table(rows=0, cols=2)
+    t.style = "Light Grid Accent 1"
+    for k, v in rows_for(d, c):
+        cells = t.add_row().cells
+        cells[0].text, cells[1].text = k, str(v)
+    doc.add_heading("Handover checklist", 2)
+    for item in CHECKLIST:
+        doc.add_paragraph(("[x] " if item in c["done"] else "[  ] ") + item)
+    doc.add_paragraph("\n\nEmployee signature: ______________    Manager signature: ______________    HR: ______________")
     bio = io.BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-# Helper for Excel (.xlsx)
-def generate_excel(data, exp_days):
-    df_single = pd.DataFrame([{
-        "Recipient Name": data.get('recipient_name', ''),
-        "Employee Name": data['employee_name'],
-        "Branch": data['branch'],
-        "Job Title": data['job_title'],
-        "Hiring Date": data['hiring_date'].strftime('%Y-%m-%d'),
-        "Resignation Date": data['resignation_date'].strftime('%Y-%m-%d'),
-        "Last Working Day": data['last_working_day'].strftime('%Y-%m-%d'),
-        "Total Experience (Days)": exp_days,
-        "Grading System": data['grading'],
-        "Total Net Pay (EGP)": data['net_pay'],
-        "Reason": data['reason'],
-        "Notice Period Status": data['notice_period'],
-        "Handover Status": data['handover_status'],
-        "Direct Manager": data['direct_manager'],
-        "Absence Days": data['absence_days'],
-        "Loan Balance EGP": data['loan_balance']
-    }])
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_single.to_excel(writer, index=False, sheet_name='Resignation')
-    return output.getvalue()
 
-# Database Initialization
-if 'resignations_db' not in st.session_state:
-    st.session_state.resignations_db = [
-        {
-            "id": 1,
-            "recipient_name": "Mohamed",
-            "employee_name": "Abu Bakr Muhammad Mahmoud",
-            "job_title": "Sales Casual",
-            "branch": "Park-St Branch",
-            "grading": "G1 - L1",
-            "hiring_date": date(2026, 10, 3),
-            "resignation_date": date(2026, 10, 20),
-            "last_working_day": date(2026, 10, 20),
-            "net_pay": 7000,
-            "reason": "Education",
-            "direct_manager": "Sherif S. El-Sayed",
-            "notice_period": "One Month",
-            "handover_status": "Team Leader",
-            "absence_days": 0,
-            "loan_balance": 0,
-            "photo_b64": None
-        }
-    ]
+def make_excel(df):
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="xlsxwriter") as w:
+        df.to_excel(w, index=False, sheet_name="Resignations")
+        ws = w.sheets["Resignations"]
+        for i, col in enumerate(df.columns):
+            ws.set_column(i, i, min(max(len(str(col)), *(len(str(x)) for x in df[col])) + 2, 40) if len(df) else 15)
+        ws.freeze_panes(1, 0)
+    return bio.getvalue()
 
-# ---------------------------------------------------------
-# Top Navigation Bar
-# ---------------------------------------------------------
-tab_main, tab_manage, tab_dashboard = st.tabs([
-    "🏠 عرض وطباعة الاستقالة (A4)", 
-    "📝 إضافة / تعديل / حذف استقالة", 
-    "📊 داشبورد الفروع"
-])
 
-# ---------------------------------------------------------
-# TAB 1: DISPLAY & EXPORT A4 TEMPLATE
-# ---------------------------------------------------------
-with tab_main:
-    if not st.session_state.resignations_db:
+def to_df(rows):
+    out = []
+    for d in rows:
+        c = calc(d)
+        out.append({"ID": d["id"], "Employee": d["employee_name"], "Code": d["employee_code"],
+                    "Branch": d["branch"], "Job Title": d["job_title"], "Hired": d["hiring_date"],
+                    "Resigned": d["resignation_date"], "Last Day": d["last_working_day"],
+                    "Experience (days)": c["exp"], "Net Pay (EGP)": c["net"], "Reason": d["reason"],
+                    "Manager": d["direct_manager"], "Notice": d["notice_period"],
+                    "Notice Shortfall (days)": c["shortfall"], "Status": d["status"],
+                    "Checklist": f"{len(c['done'])}/{len(CHECKLIST)}"})
+    return pd.DataFrame(out)
+
+
+# --------------------------------------------------------------- A4 card UI
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+html,body,[class*="css"]{font-family:'Inter',sans-serif}
+.stApp{background:#F8F6F0}
+.stTabs [data-baseweb="tab-list"]{gap:12px;padding-bottom:12px;border-bottom:2px solid #EADBCE}
+.stTabs [data-baseweb="tab"]{height:46px;background:#fff;border-radius:8px;color:#8C5A2B;font-weight:700;
+  border:1.5px solid #D6C2A7;padding:0 22px;transition:all .2s}
+.stTabs [data-baseweb="tab"]:hover{transform:translateY(-2px);border-color:#8C5A2B}
+.stTabs [aria-selected="true"]{background:#8C5A2B!important;color:#fff!important;box-shadow:0 4px 12px rgba(140,90,43,.4)}
+"""
+
+CARD_CSS = """
+body{font-family:'Inter',sans-serif;background:#F8F6F0;margin:0;padding:10px}
+.btns{display:flex;gap:10px;justify-content:flex-end;margin-bottom:12px}
+.btn{background:#8C5A2B;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:700;cursor:pointer}
+.card{background:#FAF8F5;border:1.5px solid #D6C2A7;border-radius:12px;padding:22px;max-width:800px;margin:0 auto}
+.head{display:flex;justify-content:space-between;gap:12px}
+.profile{background:#fff;border:1px solid #D6C2A7;border-radius:10px;padding:10px;display:flex;gap:12px;align-items:center}
+.row{display:flex;gap:8px;margin-top:10px}.row>div{flex:1;text-align:center}
+.step{border:1px solid #D6C2A7;border-radius:8px;padding:6px;font-size:11px}
+.badge{background:#8C5A2B;color:#fff;border-radius:14px;padding:5px 8px;font-weight:700;font-size:11px;margin-bottom:4px}
+.box{border:1px solid #D6C2A7;border-radius:6px;padding:6px;font-weight:800;font-size:13px;background:#fff}
+table{width:100%;border-collapse:collapse;margin-top:10px;border:1px solid #D6C2A7}
+th{background:#8C5A2B;color:#fff;padding:6px 10px;text-align:left;font-size:12px}
+td{padding:5px 10px;border-bottom:1px solid #EADBCE;font-size:12px}
+tr:nth-child(even){background:#fff}
+.sig{display:flex;gap:20px;margin-top:26px;font-size:11px;color:#555}.sig div{flex:1;border-top:1px solid #999;padding-top:4px}
+@media print{.no-print{display:none!important}body{background:#fff;padding:0}.card{border:0;max-width:100%}}
+"""
+
+
+def card_html(d, c, company):
+    color = STATUS_COLOR[d["status"]]
+    if d.get("photo"):
+        mime = "image/png" if d["photo"][:4] == b"\x89PNG" else "image/jpeg"
+        img = f'<img src="data:{mime};base64,{base64.b64encode(d["photo"]).decode()}" style="width:105px;height:140px;object-fit:cover;border-radius:8px;border:1px solid #D6C2A7">'
+    else:
+        img = '<div style="width:105px;height:140px;background:#EADBCE;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:42px">👤</div>'
+    steps = [("👤", "Joined", fmt(d["hiring_date"])), ("🏆", "Experience", f"{c['exp']} Days"),
+             ("📄", "Submitted", fmt(d["resignation_date"])), ("🕒", "Notice", d["notice_period"]),
+             ("✅", "Status", d["status"])]
+    steps_html = "".join(f'<div class="step"><div style="font-size:16px">{i}</div><b>{esc(t)}</b><div>{esc(v)}</div></div>' for i, t, v in steps)
+    kpis = [("Total Net Pay (EGP)", f"{c['net']:,.0f}"), ("Last Working Day", fmt(d["last_working_day"])),
+            ("Reason", d["reason"]), ("Direct Manager", d["direct_manager"])]
+    kpi_html = "".join(f'<div><div class="badge">{esc(t)}</div><div class="box">{esc(v)}</div></div>' for t, v in kpis)
+    table = "".join(f"<tr><td style='width:40%'>{esc(k)}</td><td><b>{esc(v)}</b></td></tr>" for k, v in rows_for(d, c))
+    todo = "".join(f"<div>{'☑' if i in c['done'] else '☐'} {esc(i)}</div>" for i in CHECKLIST)
+    warn = (f'<div style="margin-top:8px;color:#B3261E;font-weight:700;font-size:12px">⚠ Notice shortfall: {c["shortfall"]} days '
+            f'(required last day {fmt(c["required_last"])})</div>') if c["shortfall"] else ""
+    js = """<script>function dl(){html2canvas(document.getElementById('cap'),{scale:2}).then(c=>{const a=document.createElement('a');
+    a.download='Resignation___NAME__.png';a.href=c.toDataURL('image/png');a.click();});}</script>""".replace("__NAME__", esc(d["employee_name"]).replace(" ", "_"))
+    return f"""<html><head><script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>{CARD_CSS}</style></head><body>
+    <div class="btns no-print"><button class="btn" onclick="dl()">🖼️ PNG</button><button class="btn" onclick="window.print()">🖨️ Print / PDF</button></div>
+    <div id="cap" class="card">
+      <div class="head"><div><div style="color:#8C5A2B;font-weight:700">{esc(company)}</div>
+        <div style="color:#8C5A2B;font-weight:700;font-size:15px;margin:4px 0">Dear {esc(c['recipient'])},</div>
+        <div style="color:#8C5A2B;font-weight:800;font-size:24px;line-height:1.1">RESIGNATION<br>APPROVAL REQUEST</div>
+        <div style="display:inline-block;margin-top:8px;background:{color};color:#fff;border-radius:12px;padding:3px 12px;font-size:12px;font-weight:700">{esc(d['status']).upper()}</div></div>
+        <div class="profile">{img}<div><div style="font-size:10px;color:#8C5A2B;font-weight:800">EMPLOYEE PROFILE</div>
+        <div style="font-size:16px;font-weight:800">{esc(d['employee_name'])}</div>
+        <div style="font-size:12px;color:#444">{esc(d['job_title'])} · {esc(d['employee_code'])}</div>
+        <div style="font-size:11px;color:#666;margin-top:4px">{esc(d['branch'])}</div></div></div></div>
+      <div style="font-weight:800;margin:12px 0 6px">Resignation Journey</div><div class="row">{steps_html}</div>
+      <div class="row">{kpi_html}</div>{warn}
+      <table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>{table}</tbody></table>
+      <div style="background:#fff;border:1px solid #D6C2A7;border-radius:8px;padding:10px;margin-top:10px">
+        <div style="color:#8C5A2B;font-weight:800;font-size:13px">HANDOVER CHECKLIST ({len(c['done'])}/{len(CHECKLIST)})</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;margin-top:6px">{todo}</div></div>
+      <div class="sig"><div>Employee</div><div>Direct Manager</div><div>HR</div></div>
+    </div>{js}</body></html>"""
+
+
+# --------------------------------------------------------------------- app
+def gate():
+    pw = secret("APP_PASSWORD")
+    if not pw or st.session_state.get("auth"):
+        return
+    st.title("🔒 Resignation Approval System")
+    entered = st.text_input("Password", type="password")
+    if st.button("Login", type="primary"):
+        if hmac.compare_digest(entered, pw):
+            st.session_state.auth = True
+            st.rerun()
+        st.error("Wrong password")
+    st.stop()
+
+
+init_db()
+st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+gate()
+if "flash" in st.session_state:
+    st.toast(st.session_state.pop("flash"))
+
+with st.sidebar:
+    st.header("⚙️ Settings")
+    company = st.text_input("Company name", value="Company")
+    st.caption("Data is stored in " + DB_PATH)
+    if os.path.exists(DB_PATH):
+        st.download_button("💾 Backup database", open(DB_PATH, "rb").read(), "resignations_backup.db")
+
+tab_view, tab_manage, tab_dash, tab_audit = st.tabs(
+    ["🏠 عرض وطباعة الاستقالة", "📝 إضافة / تعديل / حذف", "📊 داشبورد", "🧾 Audit Log"])
+
+# ------------------------------------------------------------- TAB 1: view
+with tab_view:
+    rows = get_all()
+    if not rows:
         st.warning("⚠️ لا توجد بيانات استقالات مسجلة حالياً.")
     else:
-        emp_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
-        selected_id = st.selectbox("اختر الموظف لعرض طلب الاستقالة الخاصة به:", options=list(emp_options.keys()), format_func=lambda x: emp_options[x])
-
-        data = next(item for item in st.session_state.resignations_db if item["id"] == selected_id)
-
-        exp_days = (data['last_working_day'] - data['hiring_date']).days
-        if exp_days < 0:
-            exp_days = 0
-
-        h_date = data['hiring_date'].strftime("%d/%m/%Y")
-        r_date = data['resignation_date'].strftime("%d/%m/%Y")
-        l_date = data['last_working_day'].strftime("%d/%m/%Y")
-        r_date_header = data['resignation_date'].strftime("%d %b %Y")
-        
-        recipient = data.get('recipient_name', '').strip()
-        if not recipient:
-            recipient = "Mohamed"
-        if not recipient.lower().startswith("mr.") and not recipient.lower().startswith("ms."):
-            recipient_title = f"Mr. {recipient}"
+        f1, f2 = st.columns([1, 2])
+        status_filter = f1.multiselect("Filter by status", STATUSES, default=STATUSES)
+        pool = [r for r in rows if r["status"] in status_filter]
+        if not pool:
+            st.info("No records match this filter.")
         else:
-            recipient_title = recipient
+            labels = {r["id"]: f"{r['employee_name']} — {r['branch']} [{r['status']}]" for r in pool}
+            sel = f2.selectbox("اختر الموظف:", list(labels), format_func=labels.get)
+            d = get_one(sel)
+            c = calc(d)
 
-        # Export Toolbar
-        st.markdown("#### 📥 خيارات الحفظ والتصدير [Export & Save Options]:")
-        col_btn1, col_btn2 = st.columns(2)
-        
-        with col_btn1:
-            word_bytes = generate_word_doc(data, exp_days)
-            st.download_button(
-                label="📄 حفظ كملف Word (.docx)",
-                data=word_bytes,
-                file_name=f"Resignation_{data['employee_name']}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True
-            )
-            
-        with col_btn2:
-            excel_bytes = generate_excel(data, exp_days)
-            st.download_button(
-                label="📊 حفظ كملف Excel (.xlsx)",
-                data=excel_bytes,
-                file_name=f"Resignation_{data['employee_name']}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+            with st.expander("✅ Decision & Handover Checklist", expanded=True):
+                k1, k2 = st.columns([1, 2])
+                new_status = k1.selectbox("Decision", STATUSES, index=STATUSES.index(d["status"]), key=f"st_{sel}")
+                comment = k2.text_input("Manager comment", value=d["manager_comment"] or "", key=f"cm_{sel}")
+                done = st.multiselect("Completed items", CHECKLIST, default=c["done"], key=f"ck_{sel}")
+                if st.button("💾 Save decision", type="primary", key=f"sv_{sel}"):
+                    run("UPDATE resignations SET status=?, manager_comment=?, checklist=?, updated_at=? WHERE id=?",
+                        (new_status, comment, json.dumps(done), now(), sel))
+                    log(sel, "Decision", f"{d['status']} → {new_status}; checklist {len(done)}/{len(CHECKLIST)}")
+                    st.session_state.flash = "Decision saved ✅"
+                    st.rerun()
 
-        st.markdown("---")
+            if c["shortfall"]:
+                st.warning(f"Notice shortfall of {c['shortfall']} days — required last working day is {fmt(c['required_last'])}.")
 
-        if data.get('photo_b64'):
-            img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:105px; height:140px; border-radius:8px; object-fit:cover; border:1px solid #D6C2A7;" />'
-        else:
-            img_html = '<div style="width:105px; height:140px; background:#EADBCE; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:42px; border:1px solid #D6C2A7;">👤</div>'
+            st.markdown("#### 📥 Export")
+            e1, e2, e3 = st.columns(3)
+            safe = d["employee_name"].replace(" ", "_")
+            word = make_docx(d, c, company)
+            e1.download_button("📄 Word (.docx)", word, f"Resignation_{safe}.docx", use_container_width=True,
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            e2.download_button("📊 Excel (this employee)", make_excel(to_df([d])), f"Resignation_{safe}.xlsx",
+                               use_container_width=True,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            e3.download_button("📚 Excel (all records)", make_excel(to_df(rows)), "All_Resignations.xlsx",
+                               use_container_width=True,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        # Dynamic Render with html2canvas Image Generator & PDF Print Engine
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-            <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-                body {{
-                    font-family: 'Inter', sans-serif;
-                    background-color: #F8F6F0;
-                    margin: 0;
-                    padding: 10px;
-                }}
-                .btn-group {{
-                    display: flex;
-                    gap: 10px;
-                    justify-content: flex-end;
-                    margin-bottom: 15px;
-                }}
-                .action-btn {{
-                    background-color: #8C5A2B;
-                    color: white;
-                    border: none;
-                    padding: 11px 20px;
-                    border-radius: 8px;
-                    font-weight: bold;
-                    font-size: 13px;
-                    cursor: pointer;
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 6px;
-                    box-shadow: 0px 3px 8px rgba(140, 90, 43, 0.3);
-                }}
-                .action-btn:hover {{ background-color: #704721; }}
-                .a4-card {{
-                    background-color: #FAF8F5;
-                    border: 1.5px solid #D6C2A7;
-                    border-radius: 12px;
-                    padding: 22px;
-                    max-width: 800px;
-                    margin: 0 auto;
-                    box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
-                }}
-                .custom-table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-top: 10px;
-                    border: 1px solid #D6C2A7;
-                }}
-                .custom-table th {{
-                    background-color: #8C5A2B;
-                    color: white;
-                    padding: 6px 10px;
-                    text-align: left;
-                    font-size: 12px;
-                    font-weight: 700;
-                }}
-                .custom-table td {{
-                    padding: 5px 10px;
-                    border-bottom: 1px solid #EADBCE;
-                    font-size: 12px;
-                    color: #222;
-                }}
-                .custom-table tr:nth-child(even) {{ background-color: #FAF8F5; }}
-                .metric-badge {{
-                    background-color: #8C5A2B;
-                    color: white;
-                    border-radius: 14px;
-                    padding: 5px 8px;
-                    text-align: center;
-                    font-weight: 700;
-                    font-size: 11px;
-                    margin-bottom: 4px;
-                }}
-                .metric-box {{
-                    background-color: #FAF8F5;
-                    border: 1px solid #D6C2A7;
-                    border-radius: 6px;
-                    padding: 6px;
-                    text-align: center;
-                    font-weight: 800;
-                    font-size: 13px;
-                    color: #111;
-                }}
-                @media print {{
-                    .no-print {{ display: none !important; }}
-                    body {{ background: white; padding: 0; }}
-                    .a4-card {{ border: none; box-shadow: none; width: 100%; max-width: 100%; padding: 0; }}
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="btn-group no-print">
-                <button onclick="downloadAsImage()" class="action-btn">🖼️ تنزيل كصورة (PNG)</button>
-                <button onclick="window.print()" class="action-btn">🖨️ طباعة / حفظ كـ PDF</button>
-            </div>
+            components.html(card_html(d, c, company), height=1050, scrolling=True)
 
-            <div id="capture-card" class="a4-card">
-                <table style="width:100%; border:none; margin-bottom:12px;">
-                    <tr>
-                        <td style="width:55%; vertical-align:top; border:none;">
-                            <div style="color:#8C5A2B; font-size:16px; font-weight:700; margin-bottom:4px;">Dear {recipient_title},</div>
-                            <div style="color:#8C5A2B; font-weight:800; font-size:24px; line-height:1.1;">RESIGNATION<br>APPROVAL REQUEST</div>
-                        </td>
-                        <td style="width:45%; vertical-align:top; border:none;">
-                            <div style="background:#FAF8F5; border:1px solid #D6C2A7; border-radius:10px; padding:10px; display:flex; gap:12px; align-items:center;">
-                                {img_html}
-                                <div>
-                                    <div style="font-size:10px; text-transform:uppercase; color:#8C5A2B; font-weight:800; letter-spacing:0.5px;">EMPLOYEE PROFILE</div>
-                                    <div style="font-size:16px; font-weight:800; color:#111; margin:3px 0;">{data['employee_name']}</div>
-                                    <div style="font-size:12px; color:#444;">{data['job_title']}</div>
-                                    <div style="font-size:11px; color:#666; margin-top:4px;">Resigning {r_date_header}</div>
-                                </div>
-                            </div>
-                        </td>
-                    </tr>
-                </table>
+            with st.expander("📧 Send by email (Word file attached)"):
+                a, b = st.columns(2)
+                sender = a.text_input("Sender", value=secret("SMTP_USER"))
+                pwd = a.text_input("App password", type="password", value=secret("SMTP_PASS"))
+                receiver = b.text_input("Receiver")
+                host = b.text_input("SMTP host", value=secret("SMTP_HOST", "smtp.gmail.com"))
+                if st.button("🚀 Send"):
+                    if not (sender and pwd and receiver):
+                        st.error("Please fill in sender, password and receiver.")
+                    else:
+                        try:
+                            msg = MIMEMultipart()
+                            msg["Subject"] = f"Resignation Approval Request - {d['employee_name']}"
+                            msg["From"], msg["To"] = sender, receiver
+                            lines = "".join(f"<p><b>{esc(k)}:</b> {esc(v)}</p>" for k, v in rows_for(d, c))
+                            msg.attach(MIMEText(f"<h3>Dear {esc(c['recipient'])},</h3>{lines}", "html"))
+                            part = MIMEApplication(word, Name=f"Resignation_{safe}.docx")
+                            part["Content-Disposition"] = f'attachment; filename="Resignation_{safe}.docx"'
+                            msg.attach(part)
+                            with smtplib.SMTP(host, 587, timeout=30) as s:
+                                s.starttls()
+                                s.login(sender, pwd)
+                                s.sendmail(sender, receiver, msg.as_string())
+                            log(sel, "Emailed", receiver)
+                            st.success("✅ Email sent!")
+                        except Exception as ex:
+                            st.error(f"❌ Failed: {ex}")
 
-                <div style="color:#000; font-weight:800; font-size:14px; margin-top:6px; margin-bottom:6px;">Resignation Journey</div>
-                
-                <div style="display:flex; gap:6px; text-align:center;">
-                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">👤</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Joined</div><div style="font-size:11px;">{h_date}</div></div>
-                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">🏆</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Total Experience</div><div style="font-size:11px;">{exp_days} Days</div></div>
-                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">📄</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Submitted</div><div style="font-size:11px;">{r_date}</div></div>
-                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">🕒</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Notice Period</div><div style="font-size:11px;">{data["notice_period"]}</div></div>
-                    <div style="flex:1; border:1px solid #D6C2A7; border-radius:8px; padding:6px;"><div style="background:#8C5A2B; color:white; border-radius:50%; width:22px; height:22px; margin:auto; font-size:10px; display:flex; align-items:center; justify-content:center;">✅</div><div style="font-size:10px; font-weight:700; margin-top:2px;">Finalized</div><div style="font-size:11px;">Approved {r_date}</div></div>
-                </div>
-
-                <div style="display:flex; gap:8px; margin-top:10px;">
-                    <div style="flex:1;"><div class="metric-badge">Total Net Pay (EGP)</div><div class="metric-box">{data["net_pay"]}</div></div>
-                    <div style="flex:1;"><div class="metric-badge">Last Working Day</div><div class="metric-box">{l_date}</div></div>
-                    <div style="flex:1;"><div class="metric-badge">Reason for Leaving</div><div class="metric-box">{data["reason"]}</div></div>
-                    <div style="flex:1;"><div class="metric-badge">Direct Manager</div><div class="metric-box">{data["direct_manager"]}</div></div>
-                </div>
-
-                <table class="custom-table">
-                    <thead>
-                        <tr><th style="width:40%;">Field</th><th style="width:60%;">Value</th></tr>
-                    </thead>
-                    <tbody>
-                        <tr><td>Employee Name</td><td><b>{data['employee_name']}</b></td></tr>
-                        <tr><td>Branch</td><td>{data['branch']}</td></tr>
-                        <tr><td>Job Title</td><td>{data['job_title']}</td></tr>
-                        <tr><td>Hiring Date</td><td>{h_date}</td></tr>
-                        <tr><td>Resignation Date</td><td>{r_date}</td></tr>
-                        <tr><td>Last Working Day</td><td>{l_date}</td></tr>
-                        <tr><td>Grading System</td><td>{data['grading']}</td></tr>
-                        <tr><td>Total Net to pay EGP</td><td><b>{data['net_pay']}</b></td></tr>
-                        <tr><td>Reason for Leaving</td><td>{data['reason']}</td></tr>
-                        <tr><td>Notice Period Status</td><td>{data['notice_period']}</td></tr>
-                        <tr><td>Handover Status</td><td>{data['handover_status']}</td></tr>
-                        <tr><td>Total Experience</td><td>{exp_days} Day</td></tr>
-                        <tr><td>Direct Manager</td><td>{data['direct_manager']}</td></tr>
-                        <tr><td>Absence during the year</td><td>{data['absence_days']} Day</td></tr>
-                        <tr><td>Loan balance</td><td>{data['loan_balance']} EGP</td></tr>
-                    </tbody>
-                </table>
-
-                <div style="background:#FAF8F5; border:1px solid #D6C2A7; border-radius:8px; padding:10px; margin-top:10px;">
-                    <div style="color:#8C5A2B; font-weight:800; font-size:13px;">MANAGER ACTION ITEMS</div>
-                    <div style="color:#8C5A2B; font-weight:700; font-size:11px; margin-bottom:6px;">Resignation Next Steps</div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px;">
-                        <div>🧮 Calculate final dues payout ({data['net_pay']} EGP).</div>
-                        <div>🤝 Facilitate handover process with {data['handover_status']}.</div>
-                        <div>🕒 Review notice period waiver request ({data['notice_period']}).</div>
-                        <div>📦 Schedule property return (laptop, badge, keys).</div>
-                    </div>
-                </div>
-            </div>
-
-            <script>
-                function downloadAsImage() {{
-                    const element = document.getElementById("capture-card");
-                    html2canvas(element, {{ scale: 2 }}).then(canvas => {{
-                        const link = document.createElement("a");
-                        link.download = "Resignation_{data['employee_name']}.png";
-                        link.href = canvas.toDataURL("image/png");
-                        link.click();
-                    }});
-                }}
-            </script>
-        </body>
-        </html>
-        """
-        components.html(html_content, height=940, scrolling=True)
-
-        # EMAIL TEMPLATE SECTION
-        with st.expander("📧 إرسال / نسخ قالب الإيميل (Email Options)"):
-            c_e1, c_e2 = st.columns(2)
-            with c_e1:
-                sender = st.text_input("بريد المرسل (Sender Email)")
-                pwd = st.text_input("كلمة مرور التطبيق (App Password)", type="password")
-            with c_e2:
-                receiver = st.text_input("بريد المستلم (Receiver Email)")
-                smtp_host = st.text_input("سيرفر SMTP", value="smtp.gmail.com")
-
-            if st.button("🚀 إرسال التقرير مباشرة بالإيميل"):
-                if sender and pwd and receiver:
-                    try:
-                        msg = MIMEMultipart('alternative')
-                        msg['Subject'] = f"Resignation Approval Request - {data['employee_name']}"
-                        msg['From'] = sender
-                        msg['To'] = receiver
-                        
-                        email_html = f"""
-                        <html>
-                        <body style="font-family: Arial, sans-serif; background-color: #F8F6F0; padding: 20px;">
-                            <div style="background-color: #FAF8F5; border: 1px solid #D6C2A7; padding: 20px; border-radius: 10px; max-width: 600px; margin: auto;">
-                                <h3 style="color: #8C5A2B;">Dear {recipient_title},</h3>
-                                <h2 style="color: #8C5A2B;">RESIGNATION APPROVAL REQUEST</h2>
-                                <hr style="border: 1px solid #EADBCE;">
-                                <p><b>Employee Name:</b> {data['employee_name']}</p>
-                                <p><b>Branch:</b> {data['branch']}</p>
-                                <p><b>Job Title:</b> {data['job_title']}</p>
-                                <p><b>Hiring Date:</b> {h_date}</p>
-                                <p><b>Last Working Day:</b> {l_date}</p>
-                                <p><b>Total Experience:</b> {exp_days} Days</p>
-                                <p><b>Total Net Pay:</b> {data['net_pay']} EGP</p>
-                                <p><b>Reason for Leaving:</b> {data['reason']}</p>
-                                <p><b>Direct Manager:</b> {data['direct_manager']}</p>
-                            </div>
-                        </body>
-                        </html>
-                        """
-                        msg.attach(MIMEText(email_html, 'html'))
-                        server = smtplib.SMTP(smtp_host, 587)
-                        server.starttls()
-                        server.login(sender, pwd)
-                        server.sendmail(sender, receiver, msg.as_string())
-                        server.quit()
-                        st.success("✅ تم إرسال الإيميل بنجاح!")
-                    except Exception as e:
-                        st.error(f"❌ فشل إرسال الإيميل: {e}")
-                else:
-                    st.error("يرجى ملء جميع بيانات الإيميل.")
-
-# ---------------------------------------------------------
-# TAB 2: EDIT & MANAGE RESIGNATIONS
-# ---------------------------------------------------------
+# ------------------------------------------------------------ TAB 2: manage
 with tab_manage:
     st.subheader("⚙️ إدارة تسجيلات الاستقالات")
+    action = st.radio("الإجراء", ["إضافة ➕", "تعديل ✏️", "حذف 🗑️"], horizontal=True)
+    rows = get_all()
+    labels = {r["id"]: f"{r['employee_name']} — {r['branch']}" for r in rows}
 
-    action_type = st.radio("اختر نوع الإجراء المطلوب:", ["إضافة استقالة جديدة ➕", "تعديل بيانات استقالة ✏️", "حذف استقالة 🗑️"], horizontal=True)
-
-    if action_type == "حذف استقالة 🗑️":
-        if not st.session_state.resignations_db:
-            st.warning("لا توجد استقالات مسجلة لحذفها.")
+    if action == "حذف 🗑️":
+        if not rows:
+            st.warning("لا توجد استقالات.")
         else:
-            del_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
-            del_id = st.selectbox("اختر الاستقالة المراد حذفها نهائياً:", options=list(del_options.keys()), format_func=lambda x: del_options[x])
-            
-            if st.button("❌ تأكيد الحذف النهائي", type="primary"):
-                st.session_state.resignations_db = [r for r in st.session_state.resignations_db if r['id'] != del_id]
-                st.success("✅ تم حذف الاستقالة بنجاح!")
+            del_id = st.selectbox("اختر السجل", list(labels), format_func=labels.get)
+            sure = st.checkbox("I understand this cannot be undone")
+            if st.button("❌ Delete permanently", type="primary", disabled=not sure):
+                run("DELETE FROM resignations WHERE id=?", (del_id,))
+                log(del_id, "Deleted", labels[del_id])
+                st.session_state.flash = "Deleted"
                 st.rerun()
-
     else:
-        if action_type == "تعديل بيانات استقالة ✏️" and st.session_state.resignations_db:
-            edit_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
-            edit_id = st.selectbox("اختر الموظف المراد تعديل بياناته:", options=list(edit_options.keys()), format_func=lambda x: edit_options[x])
-            target_data = next(item for item in st.session_state.resignations_db if item["id"] == edit_id)
-        else:
-            target_data = {
-                "id": None,
-                "recipient_name": "",
-                "employee_name": "",
-                "job_title": "",
-                "branch": "",
-                "grading": "",
-                "hiring_date": date.today(),
-                "resignation_date": date.today(),
-                "last_working_day": date.today(),
-                "net_pay": 0,
-                "reason": "",
-                "direct_manager": "",
-                "notice_period": "",
-                "handover_status": "",
-                "absence_days": 0,
-                "loan_balance": 0,
-                "photo_b64": None
-            }
-
-        with st.form("resignation_form"):
-            st.markdown("##### 📩 بيانات الموجه إليه الطلب والمدير المباشر")
-            col_rec1, col_rec2 = st.columns(2)
-            with col_rec1:
-                recipient_input = to_english_str(st.text_input("اسم المرسل إليه / الموجه له الطلب (Recipient Name)", value=target_data.get('recipient_name', '')))
-            with col_rec2:
-                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", value=target_data['direct_manager']))
-
-            st.markdown("---")
-            st.markdown("##### 👤 بيانات الموظف والوظيفة")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                emp_name = to_english_str(st.text_input("اسم الموظف (Employee Name)", value=target_data['employee_name']))
-                job_title = to_english_str(st.text_input("المسمى الوظيفي (Job Title)", value=target_data['job_title']))
-                branch = to_english_str(st.text_input("اسم الفرع (Branch)", value=target_data['branch']))
-                grading = to_english_str(st.text_input("الدرجة الوظيفية (Grading System)", value=target_data['grading']))
-                reason = to_english_str(st.text_input("سبب الاستقالة (Reason for Leaving)", value=target_data['reason']))
-                
-            with col2:
-                hiring_date = st.date_input("تاريخ التعيين (Hiring Date)", value=target_data['hiring_date'])
-                resignation_date = st.date_input("تاريخ تقديم الاستقالة (Resignation Date)", value=target_data['resignation_date'])
-                last_working_day = st.date_input("آخر يوم عمل (Last Working Day)", value=target_data['last_working_day'])
-                
-                calc_exp = (last_working_day - hiring_date).days
-                if calc_exp < 0:
-                    calc_exp = 0
-                st.info(f"🏆 إجمالي الخبرة (Total Experience): **{calc_exp} Days** (تحسب تلقائياً من تاريخ التعيين وآخر يوم عمل)")
-                
-                net_pay = st.number_input("إجمالي المستحقات (Total Net Pay EGP)", value=int(target_data['net_pay']), step=500)
-                notice_period = to_english_str(st.text_input("فترة الإشعار (Notice Period Status)", value=target_data['notice_period']))
-                handover_status = to_english_str(st.text_input("حالة التسليم (Handover Status)", value=target_data['handover_status']))
-
-            col3, col4 = st.columns(2)
-            with col3:
-                absence_days = st.number_input("أيام الغياب (Absence Days)", value=int(target_data['absence_days']))
-                loan_balance = st.number_input("رصيد السلفة (Loan Balance EGP)", value=int(target_data['loan_balance']))
-            with col4:
-                uploaded_photo = st.file_uploader("🖼️ رفع صورة شخصية للموظف (Upload Photo 4x6)", type=["png", "jpg", "jpeg"])
-
-            save_btn = st.form_submit_button("💾 حفظ البيانات والتحديث", type="primary")
-
-            if save_btn:
-                if uploaded_photo is not None:
-                    photo_b64 = base64.b64encode(uploaded_photo.getvalue()).decode()
+        edit = action == "تعديل ✏️"
+        rid = None
+        t = dict(recipient_name="", employee_name="", employee_code="", job_title="", branch="", grading="",
+                 hiring_date=date.today(), resignation_date=date.today(), last_working_day=date.today(),
+                 final_dues=0.0, loan_balance=0.0, other_deductions=0.0, reason="", direct_manager="",
+                 notice_period="One Month", handover_status="", absence_days=0, status="Pending",
+                 manager_comment="", checklist="[]", photo=None)
+        if edit:
+            if not rows:
+                st.warning("لا توجد سجلات للتعديل.")
+                st.stop()
+            rid = st.selectbox("اختر الموظف", list(labels), format_func=labels.get)
+            t = get_one(rid)
+        key = lambda n: f"{n}_{rid or 'new'}"
+        with st.form(key("form")):
+            r1, r2 = st.columns(2)
+            recipient = r1.text_input("المرسل إليه (Recipient)", t["recipient_name"], key=key("rec"))
+            manager = r2.text_input("المدير المباشر (Direct Manager)", t["direct_manager"], key=key("mgr"))
+            c1, c2 = st.columns(2)
+            name = c1.text_input("اسم الموظف *", t["employee_name"], key=key("nm"))
+            code = c1.text_input("كود الموظف (Employee Code)", t["employee_code"], key=key("cd"))
+            job = c1.text_input("المسمى الوظيفي", t["job_title"], key=key("jb"))
+            branch = c1.text_input("الفرع", t["branch"], key=key("br"))
+            grading = c1.text_input("الدرجة الوظيفية", t["grading"], key=key("gr"))
+            reason = c1.text_input("سبب الاستقالة", t["reason"], key=key("rs"))
+            hire = c2.date_input("تاريخ التعيين", D(t["hiring_date"]), key=key("hd"))
+            resd = c2.date_input("تاريخ تقديم الاستقالة", D(t["resignation_date"]), key=key("rd"))
+            last = c2.date_input("آخر يوم عمل", D(t["last_working_day"]), key=key("ld"))
+            notice = c2.selectbox("فترة الإشعار", list(NOTICE),
+                                  index=list(NOTICE).index(t["notice_period"]) if t["notice_period"] in NOTICE else 2,
+                                  key=key("np"))
+            handover = c2.text_input("التسليم إلى (Handover To)", t["handover_status"], key=key("ho"))
+            c3, c4, c5, c6 = st.columns(4)
+            dues = c3.number_input("المستحقات (EGP)", value=float(t["final_dues"]), step=500.0, key=key("du"))
+            loan = c4.number_input("خصم السلفة", value=float(t["loan_balance"]), step=100.0, key=key("ln"))
+            other = c5.number_input("خصومات أخرى", value=float(t["other_deductions"]), step=100.0, key=key("ot"))
+            absence = c6.number_input("أيام الغياب", value=int(t["absence_days"]), step=1, key=key("ab"))
+            photo = st.file_uploader("🖼️ صورة الموظف", type=["png", "jpg", "jpeg"], key=key("ph"))
+            if st.form_submit_button("💾 حفظ", type="primary"):
+                name_clean = to_english_str(name)
+                dup = run("SELECT id FROM resignations WHERE employee_name=? AND hiring_date=? AND id IS NOT ?",
+                          (name_clean, hire.isoformat(), rid), fetch="one")
+                if not name_clean:
+                    st.error("Employee name is required.")
+                elif resd < hire:
+                    st.error("Resignation date can't be before the hiring date.")
+                elif last < resd:
+                    st.error("Last working day can't be before the resignation date.")
+                elif dup:
+                    st.error("A record for this employee and hiring date already exists.")
                 else:
-                    photo_b64 = target_data.get('photo_b64')
+                    rec = dict(recipient_name=to_english_str(recipient), employee_name=name_clean,
+                               employee_code=to_english_str(code), job_title=to_english_str(job),
+                               branch=to_english_str(branch), grading=to_english_str(grading),
+                               hiring_date=hire.isoformat(), resignation_date=resd.isoformat(),
+                               last_working_day=last.isoformat(), final_dues=dues, loan_balance=loan,
+                               other_deductions=other, reason=to_english_str(reason),
+                               direct_manager=to_english_str(manager), notice_period=notice,
+                               handover_status=to_english_str(handover), absence_days=int(absence))
+                    if photo is not None:
+                        rec["photo"] = photo.getvalue()
+                    save(rec, rid)
+                    st.session_state.flash = "Saved ✅"
+                    st.rerun()
 
-                new_id = target_data['id'] if target_data['id'] else (max([r['id'] for r in st.session_state.resignations_db], default=0) + 1)
-                
-                updated_record = {
-                    "id": new_id,
-                    "recipient_name": recipient_input,
-                    "employee_name": emp_name if emp_name else "Unnamed Employee",
-                    "job_title": job_title,
-                    "branch": branch,
-                    "grading": grading,
-                    "hiring_date": hiring_date,
-                    "resignation_date": resignation_date,
-                    "last_working_day": last_working_day,
-                    "net_pay": net_pay,
-                    "reason": reason,
-                    "direct_manager": direct_manager,
-                    "notice_period": notice_period,
-                    "handover_status": handover_status,
-                    "absence_days": absence_days,
-                    "loan_balance": loan_balance,
-                    "photo_b64": photo_b64
-                }
-
-                if action_type == "تعديل بيانات استقالة ✏️" and target_data['id']:
-                    idx = next(i for i, item in enumerate(st.session_state.resignations_db) if item["id"] == target_data['id'])
-                    st.session_state.resignations_db[idx] = updated_record
-                    st.success("✅ تم حفظ التعديلات بنجاح!")
-                else:
-                    st.session_state.resignations_db.insert(0, updated_record)
-                    st.success("✅ تم تسجيل الاستقالة بنجاح!")
-                
-                st.rerun()
-
-# ---------------------------------------------------------
-# TAB 3: DASHBOARD
-# ---------------------------------------------------------
-with tab_dashboard:
-    st.title("📊 داشبورد تحليل استقالات الفروع")
-
-    if not st.session_state.resignations_db:
+# ----------------------------------------------------------- TAB 3: dashboard
+with tab_dash:
+    st.title("📊 داشبورد تحليل الاستقالات")
+    rows = get_all()
+    if not rows:
         st.info("لا توجد استقالات مسجلة.")
     else:
-        records = []
-        for r in st.session_state.resignations_db:
-            exp = (r['last_working_day'] - r['hiring_date']).days
-            if exp < 0:
-                exp = 0
-            records.append({
-                "المرسل إليه": r.get('recipient_name', ''),
-                "اسم الموظف": r['employee_name'],
-                "الفرع": r['branch'],
-                "المسمى الوظيفي": r['job_title'],
-                "تاريخ التعيين": r['hiring_date'].strftime("%Y-%m-%d"),
-                "آخر يوم عمل": r['last_working_day'].strftime("%Y-%m-%d"),
-                "إجمالي الخبرة (يوم)": exp,
-                "إجمالي المستحقات (EGP)": r['net_pay'],
-                "سبب الاستقالة": r['reason'],
-                "المدير المباشر": r['direct_manager']
-            })
-        
-        df = pd.DataFrame(records)
+        df = to_df(rows)
+        df["Last Day"] = pd.to_datetime(df["Last Day"])
+        f1, f2, f3 = st.columns(3)
+        sts = f1.multiselect("Status", STATUSES, default=STATUSES, key="d_st")
+        brs = f2.multiselect("Branch", sorted(df["Branch"].unique()), key="d_br")
+        lo, hi = df["Last Day"].min().date(), df["Last Day"].max().date()
+        rng = f3.date_input("Last-day range", (lo, hi), key="d_rg")
+        df = df[df["Status"].isin(sts)]
+        if brs:
+            df = df[df["Branch"].isin(brs)]
+        if isinstance(rng, tuple) and len(rng) == 2:
+            df = df[(df["Last Day"].dt.date >= rng[0]) & (df["Last Day"].dt.date <= rng[1])]
 
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("إجمالي الاستقالات", len(df))
-        m2.metric("عدد الفروع", df['الفرع'].nunique())
-        m3.metric("إجمالي المستحقات (EGP)", f"{df['إجمالي المستحقات (EGP)'].sum():,}")
-        m4.metric("متوسط الخبرة (يوم)", f"{int(df['إجمالي الخبرة (يوم)'].mean())} يوم")
+        if df.empty:
+            st.info("No data for the selected filters.")
+        else:
+            early = (df["Experience (days)"] < EARLY_LEAVER_DAYS).mean() * 100
+            m = st.columns(5)
+            m[0].metric("Resignations", len(df))
+            m[1].metric("Pending", int((df["Status"] == "Pending").sum()))
+            m[2].metric("Total net pay (EGP)", f"{df['Net Pay (EGP)'].sum():,.0f}")
+            m[3].metric("Avg tenure (days)", int(df["Experience (days)"].mean()))
+            m[4].metric(f"Early leavers (<{EARLY_LEAVER_DAYS}d)", f"{early:.0f}%")
+            st.markdown("---")
+            a, b = st.columns(2)
+            a.subheader("🏢 By branch")
+            a.bar_chart(df["Branch"].value_counts())
+            b.subheader("💡 Top reasons")
+            b.bar_chart(df["Reason"].value_counts())
+            c_, d_ = st.columns(2)
+            c_.subheader("📈 Monthly trend")
+            c_.line_chart(df.groupby(df["Last Day"].dt.to_period("M").astype(str)).size())
+            d_.subheader("👔 By manager")
+            d_.bar_chart(df["Manager"].value_counts())
+            st.markdown("---")
+            q = st.text_input("🔍 Search employee / branch / code").strip()
+            view = df[df[["Employee", "Branch", "Code"]].apply(
+                lambda col: col.astype(str).str.contains(q, case=False, na=False)).any(axis=1)] if q else df
+            st.dataframe(view, use_container_width=True, hide_index=True)
+            x1, x2 = st.columns(2)
+            x1.download_button("📥 CSV", view.to_csv(index=False).encode("utf-8-sig"), "resignations_log.csv",
+                               "text/csv", use_container_width=True)
+            x2.download_button("📥 Excel", make_excel(view), "resignations_log.xlsx", use_container_width=True,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        st.markdown("---")
-
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.subheader("🏢 توزيع الاستقالات حسب الفرع")
-            b_df = df['الفرع'].value_counts().reset_index()
-            b_df.columns = ['اسم الفرع', 'عدد الاستقالات']
-            st.dataframe(b_df, use_container_width=True)
-            st.bar_chart(data=b_df.set_index('اسم الفرع'))
-
-        with c2:
-            st.subheader("💡 الأسباب الأكثر شيوعاً")
-            r_df = df['سبب الاستقالة'].value_counts().reset_index()
-            r_df.columns = ['السبب', 'العدد']
-            st.dataframe(r_df, use_container_width=True)
-
-        st.markdown("---")
-        st.subheader("🔍 البحث والتصدير")
-        q = st.text_input("ابحث باسم الموظف أو الفرع:").strip()
-        filtered = df[df['اسم الموظف'].str.contains(q, case=False, na=False) | df['الفرع'].str.contains(q, case=False, na=False)] if q else df
-        st.dataframe(filtered, use_container_width=True)
-
-        csv = filtered.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 تصدير سجل الاستقالات كملف CSV", data=csv, file_name="resignations_master_log.csv", mime="text/csv")
+# ------------------------------------------------------------- TAB 4: audit
+with tab_audit:
+    st.subheader("🧾 Activity history")
+    logs = run("SELECT ts AS Time, rid AS ID, action AS Action, detail AS Detail FROM audit ORDER BY id DESC LIMIT 500",
+               fetch="all")
+    st.dataframe(pd.DataFrame(logs), use_container_width=True, hide_index=True) if logs else st.info("No activity yet.")
