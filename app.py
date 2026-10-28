@@ -1,4 +1,11 @@
 import streamlit as st
+import pandas as pd
+from datetime import date, datetime
+import base64
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import os
 
 # Page Configuration
 st.set_page_config(
@@ -7,7 +14,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Custom Styling (Theme Matching the Image Layout)
+# Custom CSS matching the Image Layout
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
@@ -20,152 +27,300 @@ st.markdown("""
         background-color: #FAF8F5;
         border: 1px solid #E7D5C1;
         border-radius: 16px;
-        padding: 20px;
+        padding: 24px;
         margin-bottom: 20px;
     }
-    
-    .stat-card {
+    .header-title {
+        color: #8C5A2B;
+        font-weight: 800;
+        font-size: 26px;
+        line-height: 1.2;
+        margin-bottom: 5px;
+    }
+    .sub-title {
+        color: #8C5A2B;
+        font-size: 18px;
+        font-weight: 600;
+    }
+    .profile-card {
+        background: #FAF8F5;
+        border: 1px solid #D1B89D;
+        border-radius: 12px;
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+    }
+    .profile-img {
+        width: 80px;
+        height: 80px;
+        border-radius: 10px;
+        object-fit: cover;
+    }
+    .journey-box {
         background-color: #FAF8F5;
-        border: 2px solid #B87A44;
+        border: 1px solid #E7D5C1;
         border-radius: 12px;
         padding: 12px;
         text-align: center;
     }
-    
-    .stat-title {
-        color: #5C381A;
-        font-size: 12px;
-        font-weight: 700;
-    }
-    
-    .stat-value {
-        color: #111827;
-        font-size: 16px;
-        font-weight: 800;
-    }
-    
-    .table-header {
-        background-color: #A36531;
+    .journey-icon {
+        background-color: #8C5A2B;
         color: white;
-        font-weight: bold;
-        padding: 10px 15px;
+        border-radius: 50%;
+        width: 32px;
+        height: 32px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 5px;
+        font-size: 14px;
     }
-    
-    .action-box {
-        background-color: rgba(250, 248, 245, 0.5);
+    .metric-pill {
+        background-color: #8C5A2B;
+        color: white;
+        border-radius: 20px;
+        padding: 8px 12px;
+        text-align: center;
+        font-weight: bold;
+        font-size: 13px;
+        margin-bottom: 5px;
+    }
+    .metric-val {
+        background-color: #FAF8F5;
         border: 1px solid #E7D5C1;
-        border-radius: 16px;
-        padding: 20px;
+        border-radius: 10px;
+        padding: 8px;
+        text-align: center;
+        font-weight: 800;
+        color: #333;
+    }
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+    }
+    .data-table th {
+        background-color: #8C5A2B;
+        color: white;
+        padding: 10px;
+        text-align: left;
+    }
+    .data-table td {
+        padding: 8px 12px;
+        border-bottom: 1px solid #E7D5C1;
+        font-size: 14px;
+    }
+    .data-table tr:nth-child(even) {
+        background-color: #FAF8F5;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar - Data Inputs
-st.sidebar.title("⚙️ إدخال البيانات الشخصية")
+# Initialize Session State Database
+if 'resignations' not in st.session_state:
+    st.session_state.resignations = []
 
-recipient_name = st.sidebar.text_input("اسم المدير / المرسل إليه", "Mohamed")
-photo_url = st.sidebar.text_input("رابط الصورة", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300")
+# Helper Function: Translate / Format to English
+def to_english_str(text):
+    if not text:
+        return ""
+    # Arabic to English numbers conversion
+    arabic_num = "٠١٢٣٤٥٦٧٨٩"
+    english_num = "0123456789"
+    trans = str.maketrans(arabic_num, english_num)
+    return str(text).translate(trans)
 
-st.sidebar.subheader("بيانات الموظف")
-emp_name = st.sidebar.text_input("اسم الموظف", "Abu Bakr Muhammad Mahmoud")
-job_title = st.sidebar.text_input("المسمى الوظيفي", "Sales Casual")
-branch = st.sidebar.text_input("الفرع", "Park-St Branch")
-direct_manager = st.sidebar.text_input("المدير المباشر", "Sherif S. El-Sayed")
-grading = st.sidebar.text_input("نظام الدرجات", "G1 - L1")
+# Sidebar - Controls & Inputs
+st.sidebar.header("⚙️ Enter Resignation Data")
 
-st.sidebar.subheader("التواريخ والمدة")
-hiring_date = st.sidebar.text_input("تاريخ التعيين", "03/10/2026")
-resignation_date = st.sidebar.text_input("تاريخ الاستقالة", "20/10/2026")
-last_day = st.sidebar.text_input("آخر يوم عمل", "20/10/2026")
-total_exp = st.sidebar.text_input("إجمالي الخبرة", "17 Days")
+# 1. Profile Upload & Personal Info
+st.sidebar.subheader("👤 Employee Profile")
+uploaded_photo = st.sidebar.file_uploader("Upload Profile Picture", type=["png", "jpg", "jpeg"])
+employee_name = to_english_str(st.sidebar.text_input("Employee Name", "Abu Bakr Muhammad Mahmoud"))
+job_title = to_english_str(st.sidebar.text_input("Job Title / Position", "Sales Casual"))
+branch = to_english_str(st.sidebar.text_input("Branch", "Park-St Branch"))
+grading = to_english_str(st.sidebar.text_input("Grading System", "G1 - L1"))
 
-st.sidebar.subheader("الماليات والسبب")
-net_pay = st.sidebar.text_input("صافي المستحقات (EGP)", "7000")
-reason = st.sidebar.text_input("سبب الترك", "Education")
-notice_status = st.sidebar.text_input("حالة فترة الإخطار", "One Month")
-handover = st.sidebar.text_input("تسليم العمل", "Team Leader")
-absence = st.sidebar.text_input("أيام الغياب", "0 Day")
-loan = st.sidebar.text_input("رصيد السلفة", "0 EGP")
+# 2. Key Dates & Experience
+st.sidebar.subheader("📅 Dates & Timeline")
+hiring_date = st.sidebar.date_input("Hiring / Joined Date", date(2026, 10, 3))
+resignation_date = st.sidebar.date_input("Resignation Letter Submitted", date(2026, 10, 20))
+last_working_day = st.sidebar.date_input("Last Working Day", date(2026, 10, 20))
 
-# Main Content Layout
-col_head1, col_head2 = st.columns([2, 1])
+# 3. Manager & Compensation Details
+st.sidebar.subheader("💼 Manager & Dues")
+direct_manager = to_english_str(st.sidebar.text_input("Direct Manager", "Sherif S. El-Sayed"))
+reason = to_english_str(st.sidebar.text_input("Reason for Leaving", "Education"))
+net_pay = st.sidebar.number_input("Total Net Pay (EGP)", value=7000, step=500)
+notice_period = to_english_str(st.sidebar.text_input("Notice Period Status", "One Month"))
+handover_status = to_english_str(st.sidebar.text_input("Handover Status", "Team Leader"))
+absence_days = st.sidebar.number_input("Absence during the year (Days)", value=0)
+loan_balance = st.sidebar.number_input("Loan Balance (EGP)", value=0)
 
-with col_head1:
-    st.write(f"### Dear Mr. {recipient_name},")
-    st.markdown("<h1 style='color: #834F24; margin-top: -10px;'>RESIGNATION<br>APPROVAL REQUEST</h1>", unsafe_allow_html=True)
+# Calculate total experience in days
+exp_days = (resignation_date - hiring_date).days
 
-with col_head2:
-    st.markdown(f"""
-    <div class="main-card" style="display: flex; gap: 15px; align-items: center;">
-        <img src="{photo_url}" style="width: 70px; height: 85px; object-fit: cover; border-radius: 8px;">
-        <div>
-            <div style="font-size: 10px; color: #834F24; font-weight: 800;">EMPLOYEE PROFILE</div>
-            <div style="font-size: 16px; font-weight: 800;">{emp_name}</div>
-            <div style="font-size: 13px; color: #4B5563;">{job_title}</div>
-            <div style="font-size: 11px; background: #F4ECE1; padding: 2px 8px; border-radius: 10px; margin-top: 5px; display: inline-block;">
-                Resigning {resignation_date}
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+# Save Button to Store Record in Database
+if st.sidebar.button("💾 Save Resignation Record", type="primary"):
+    record = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Employee Name": employee_name,
+        "Job Title": job_title,
+        "Branch": branch,
+        "Hiring Date": hiring_date.strftime("%d/%m/%Y"),
+        "Resignation Date": resignation_date.strftime("%d/%m/%Y"),
+        "Last Working Day": last_working_day.strftime("%d/%m/%Y"),
+        "Total Net Pay (EGP)": net_pay,
+        "Reason": reason,
+        "Direct Manager": direct_manager,
+        "Notice Period": notice_period
+    }
+    st.session_state.resignations.insert(0, record) # Insert at beginning (Newest to Oldest)
+    st.sidebar.success("Saved successfully!")
 
-# Resignation Journey Pipeline
-st.markdown("### Resignation Journey")
-j1, j2, j3, j4, j5 = st.columns(5)
-with j1:
-    st.markdown(f"**👤 Joined**<br><small>{hiring_date}</small>", unsafe_allow_html=True)
-with j2:
-    st.markdown(f"**🏆 Total Exp**<br><small>{total_exp}</small>", unsafe_allow_html=True)
-with j3:
-    st.markdown(f"**📄 Submitted**<br><small>{resignation_date}</small>", unsafe_allow_html=True)
-with j4:
-    st.markdown(f"**⏰ Notice Status**<br><small>{notice_status}</small>", unsafe_allow_html=True)
-with j5:
-    st.markdown(f"**✅ Finalized**<br><small>Approved {resignation_date}</small>", unsafe_allow_html=True)
+# Tab Layout
+tab1, tab2, tab3 = st.tabs(["📄 Approval View", "📊 Resignations Database", "📧 Send via Email"])
 
-st.markdown("<br>", unsafe_allow_html=True)
+with tab1:
+    # Top Header
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        st.markdown(f"#### Dear Mr. {direct_manager.split()[0] if direct_manager else 'Manager'},")
+        st.markdown('<div class="header-title">RESIGNATION<br>APPROVAL REQUEST</div>', unsafe_allow_html=True)
+    
+    with c2:
+        # Display Photo or Default
+        if uploaded_photo:
+            st.image(uploaded_photo, width=110)
+        else:
+            st.markdown("👤 *No Profile Picture Uploaded*")
+            
+        st.markdown(f"**EMPLOYEE PROFILE**\n\n### {employee_name}\n*{job_title}*\n\nResigning {resignation_date.strftime('%d %b %Y')}")
 
-# Highlight Stat Cards
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    st.markdown(f'<div class="stat-card"><div class="stat-title">Total Net Pay (EGP)</div><div class="stat-value">{net_pay}</div></div>', unsafe_allow_html=True)
-with c2:
-    st.markdown(f'<div class="stat-card"><div class="stat-title">Last Working Day</div><div class="stat-value">{last_day}</div></div>', unsafe_allow_html=True)
-with c3:
-    st.markdown(f'<div class="stat-card"><div class="stat-title">Reason for Leaving</div><div class="stat-value">{reason}</div></div>', unsafe_allow_html=True)
-with c4:
-    st.markdown(f'<div class="stat-card"><div class="stat-title">Direct Manager</div><div class="stat-value" style="font-size:12px;">{direct_manager}</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # Resignation Journey
+    st.subheader("Resignation Journey")
+    j1, j2, j3, j4, j5 = st.columns(5)
+    
+    with j1:
+        st.markdown(f'<div class="journey-box"><div class="journey-icon">👤</div><br><b>Joined</b><br>{hiring_date.strftime("%d/%m/%Y")}</div>', unsafe_allow_html=True)
+    with j2:
+        st.markdown(f'<div class="journey-box"><div class="journey-icon">🏆</div><br><b>Total Experience</b><br>{exp_days} Days</div>', unsafe_allow_html=True)
+    with j3:
+        st.markdown(f'<div class="journey-box"><div class="journey-icon">📄</div><br><b>Resignation Submitted</b><br>{resignation_date.strftime("%d/%m/%Y")}</div>', unsafe_allow_html=True)
+    with j4:
+        st.markdown(f'<div class="journey-box"><div class="journey-icon">🕒</div><br><b>Notice Period</b><br>{notice_period}</div>', unsafe_allow_html=True)
+    with j5:
+        st.markdown(f'<div class="journey-box"><div class="journey-icon">✅</div><br><b>Process Finalized</b><br>Approved<br>{resignation_date.strftime("%d/%m/%Y")}</div>', unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-# Data Table
-data = {
-    "Field": [
-        "Employee Name", "Branch", "Job Title", "Hiring Date", "Resignation Date",
-        "Last Working Day", "Grading System", "Total Net to pay EGP", "Reason for Leaving",
-        "Notice Period Status", "Handover Status", "Total Experience", "Direct Manager",
-        "Absence during the year", "Loan balance"
-    ],
-    "Value": [
-        emp_name, branch, job_title, hiring_date, resignation_date,
-        last_day, grading, net_pay, reason,
-        notice_status, handover, total_exp, direct_manager,
-        absence, loan
-    ]
-}
-st.table(data)
+    # Key Metrics
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown('<div class="metric-pill">Total Net Pay (EGP)</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-val">{net_pay}</div>', unsafe_allow_html=True)
+    with m2:
+        st.markdown('<div class="metric-pill">Last Working Day</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-val">{last_working_day.strftime("%d/%m/%Y")}</div>', unsafe_allow_html=True)
+    with m3:
+        st.markdown('<div class="metric-pill">Reason for Leaving</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-val">{reason}</div>', unsafe_allow_html=True)
+    with m4:
+        st.markdown('<div class="metric-pill">Direct Manager</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-val">{direct_manager}</div>', unsafe_allow_html=True)
 
-# Manager Action Items Box
-st.markdown(f"""
-<div class="action-box">
-    <div style="color: #834F24; font-size: 12px; font-weight: 800;">MANAGER ACTION ITEMS</div>
-    <h4 style="margin-top: 0;">Resignation Next Steps</h4>
-    <ul>
-        <li>🧮 Calculate final dues and payout. Ensure <strong>'Total Net to pay {net_pay} EGP'</strong> is correct.</li>
-        <li>🤝 Facilitate handover process with Team Leader and new point of contact.</li>
-        <li>⏰ Review notice period waiver request <strong>({notice_status} Status)</strong>.</li>
-        <li>📦 Schedule property return (laptop, badge, keys).</li>
-        <li>✉️ Issue final acceptance letter and experience certificate.</li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Details Table
+    details_df = pd.DataFrame([
+        ("Employee Name", employee_name),
+        ("Branch", branch),
+        ("Job Title", job_title),
+        ("Hiring Date", hiring_date.strftime("%d/%m/%Y")),
+        ("Resignation Date", resignation_date.strftime("%d/%m/%Y")),
+        ("Last Working Day", last_working_day.strftime("%d/%m/%Y")),
+        ("Grading System", grading),
+        ("Total Net to pay EGP", str(net_pay)),
+        ("Reason for Leaving", reason),
+        ("Notice Period Status", notice_period),
+        ("Handover Status", handover_status),
+        ("Total Experience", f"{exp_days} Day"),
+        ("Direct Manager", direct_manager),
+        ("Absence during the year", f"{absence_days} Day"),
+        ("Loan balance", f"{loan_balance} EGP")
+    ], columns=["Field", "Value"])
+
+    st.table(details_df)
+
+with tab2:
+    st.subheader("📋 Resignation Log (Newest to Oldest)")
+    
+    # Search Filter
+    search_query = st.text_input("🔍 Search Employee Name:", "").strip()
+    
+    if st.session_state.resignations:
+        df_log = pd.DataFrame(st.session_state.resignations)
+        
+        # Apply Search Filter
+        if search_query:
+            df_log = df_log[df_log['Employee Name'].str.contains(search_query, case=False, na=False)]
+            
+        st.dataframe(df_log, use_container_width=True)
+        
+        # CSV Export
+        csv_data = df_log.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Export CSV Log", data=csv_data, file_name="resignations_log.csv", mime="text/csv")
+    else:
+        st.info("No saved resignation records yet. Click 'Save Resignation Record' in the sidebar to add records.")
+
+with tab3:
+    st.subheader("📧 Send Resignation Summary via Email")
+    
+    smtp_server = st.text_input("SMTP Server", "smtp.gmail.com")
+    smtp_port = st.number_input("SMTP Port", value=587)
+    sender_email = st.text_input("Sender Email")
+    sender_password = st.text_input("Sender App Password", type="password")
+    receiver_email = st.text_input("Recipient Email")
+    
+    if st.button("🚀 Send Email"):
+        if not sender_email or not sender_password or not receiver_email:
+            st.error("Please fill in all email configuration credentials.")
+        else:
+            try:
+                msg = MIMEMultipart('alternative')
+                msg['Subject'] = f"Resignation Request - {employee_name}"
+                msg['From'] = sender_email
+                msg['To'] = receiver_email
+
+                # HTML Template matching the layout
+                html_body = f"""
+                <html>
+                <body style="font-family: Arial, sans-serif; background-color: #FAF8F5; padding: 20px;">
+                    <div style="max-width: 600px; margin: auto; background: white; border: 1px solid #E7D5C1; padding: 20px; border-radius: 10px;">
+                        <h2 style="color: #8C5A2B;">RESIGNATION APPROVAL REQUEST</h2>
+                        <p><b>Employee Name:</b> {employee_name}</p>
+                        <p><b>Job Title:</b> {job_title}</p>
+                        <p><b>Branch:</b> {branch}</p>
+                        <p><b>Resignation Date:</b> {resignation_date.strftime("%d/%m/%Y")}</p>
+                        <p><b>Last Working Day:</b> {last_working_day.strftime("%d/%m/%Y")}</p>
+                        <p><b>Total Net Pay:</b> {net_pay} EGP</p>
+                        <p><b>Reason:</b> {reason}</p>
+                        <p><b>Direct Manager:</b> {direct_manager}</p>
+                    </div>
+                </body>
+                </html>
+                """
+                msg.attach(MIMEText(html_body, 'html'))
+
+                server = smtplib.SMTP(smtp_server, int(smtp_port))
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.sendmail(sender_email, receiver_email, msg.as_string())
+                server.quit()
+                
+                st.success("Email sent successfully!")
+            except Exception as e:
+                st.error(f"Failed to send email: {e}")
