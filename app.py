@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 import streamlit.components.v1 as components
+import base64
 
 # ---------------------------------------------------------
 # Page Configuration
@@ -13,7 +14,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# Custom CSS for App & Top Tabs Styling
+# Custom CSS for Top Navigation Tabs
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -91,7 +92,8 @@ if 'resignations_db' not in st.session_state:
             "notice_period": "One Month",
             "handover_status": "Team Leader",
             "absence_days": 0,
-            "loan_balance": 0
+            "loan_balance": 0,
+            "photo_b64": None
         }
     ]
 
@@ -123,7 +125,12 @@ with tab_main:
         r_date_header = data['resignation_date'].strftime("%d %b %Y")
         mgr_first = data['direct_manager'].split()[0] if data['direct_manager'] else 'Manager'
 
-        # Full Render Engine inside Iframe (Guarantees Working Print & HTML Rendering)
+        # Photo HTML Component
+        if data.get('photo_b64'):
+            img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:55px; height:55px; border-radius:6px; object-fit:cover;" />'
+        else:
+            img_html = '<div style="width:50px; height:50px; background:#EADBCE; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:24px;">👤</div>'
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -227,7 +234,7 @@ with tab_main:
                         </td>
                         <td style="width:42%; vertical-align:top; border:none;">
                             <div style="background:#FAF8F5; border:1px solid #D6C2A7; border-radius:8px; padding:8px; display:flex; gap:10px; align-items:center;">
-                                <div style="width:50px; height:50px; background:#EADBCE; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:24px;">👤</div>
+                                {img_html}
                                 <div>
                                     <div style="font-size:10px; text-transform:uppercase; color:#8C5A2B; font-weight:800;">EMPLOYEE PROFILE</div>
                                     <div style="font-size:16px; font-weight:800; color:#111;">{data['employee_name']}</div>
@@ -283,19 +290,16 @@ with tab_main:
                     <div style="color:#8C5A2B; font-weight:800; font-size:13px;">MANAGER ACTION ITEMS</div>
                     <div style="color:#8C5A2B; font-weight:700; font-size:11px; margin-bottom:6px;">Resignation Next Steps</div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px;">
-                        <div>🧮 Calculate final dues payout ({data['net_pay']} EGP). Ensure 'Total Net to pay {data['net_pay']} EGP' is correct.</div>
-                        <div>🤝 Facilitate handover process with {data['handover_status']} and new point of contact.</div>
+                        <div>🧮 Calculate final dues payout ({data['net_pay']} EGP).</div>
+                        <div>🤝 Facilitate handover process with {data['handover_status']}.</div>
                         <div>🕒 Review notice period waiver request ({data['notice_period']}).</div>
                         <div>📦 Schedule property return (laptop, badge, keys).</div>
-                        <div>📑 Issue final acceptance letter and experience certificate.</div>
                     </div>
                 </div>
             </div>
         </body>
         </html>
         """
-        
-        # Render Component
         components.html(html_content, height=880, scrolling=True)
 
 # ---------------------------------------------------------
@@ -313,12 +317,13 @@ with tab_manage:
             del_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
             del_id = st.selectbox("اختر الاستقالة المراد حذفها نهائياً:", options=list(del_options.keys()), format_func=lambda x: del_options[x])
             
-            if st.button("❌ تأكيد الحذف النهائيات", type="primary"):
+            if st.button("❌ تأكيد الحذف النهائي", type="primary"):
                 st.session_state.resignations_db = [r for r in st.session_state.resignations_db if r['id'] != del_id]
                 st.success("✅ تم حذف الاستقالة بنجاح!")
                 st.rerun()
 
     else:
+        # Default Empty values for NEW resignation, pre-filled for EDIT
         if action_type == "تعديل بيانات استقالة ✏️" and st.session_state.resignations_db:
             edit_options = {r['id']: f"{r['employee_name']} — ({r['branch']})" for r in st.session_state.resignations_db}
             edit_id = st.selectbox("اختر الموظف المراد تعديل بياناته:", options=list(edit_options.keys()), format_func=lambda x: edit_options[x])
@@ -326,55 +331,63 @@ with tab_manage:
         else:
             target_data = {
                 "id": None,
-                "employee_name": "Abu Bakr Muhammad Mahmoud",
-                "job_title": "Sales Casual",
-                "branch": "Park-St Branch",
-                "grading": "G1 - L1",
-                "hiring_date": date(2026, 10, 3),
-                "resignation_date": date(2026, 10, 20),
-                "last_working_day": date(2026, 10, 20),
-                "net_pay": 7000,
-                "reason": "Education",
-                "direct_manager": "Sherif S. El-Sayed",
-                "notice_period": "One Month",
-                "handover_status": "Team Leader",
+                "employee_name": "",
+                "job_title": "",
+                "branch": "",
+                "grading": "",
+                "hiring_date": date.today(),
+                "resignation_date": date.today(),
+                "last_working_day": date.today(),
+                "net_pay": None,
+                "reason": "",
+                "direct_manager": "",
+                "notice_period": "",
+                "handover_status": "",
                 "absence_days": 0,
-                "loan_balance": 0
+                "loan_balance": 0,
+                "photo_b64": None
             }
 
         with st.form("resignation_form"):
             col1, col2 = st.columns(2)
             
             with col1:
-                emp_name = to_english_str(st.text_input("اسم الموظف (Employee Name)", target_data['employee_name']))
-                job_title = to_english_str(st.text_input("المسمى الوظيفي (Job Title)", target_data['job_title']))
-                branch = to_english_str(st.text_input("اسم الفرع (Branch)", target_data['branch']))
-                grading = to_english_str(st.text_input("الدرجة الوظيفية (Grading System)", target_data['grading']))
-                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", target_data['direct_manager']))
-                reason = to_english_str(st.text_input("سبب الاستقالة (Reason for Leaving)", target_data['reason']))
+                emp_name = to_english_str(st.text_input("اسم الموظف (Employee Name)", value=target_data['employee_name'], placeholder="e.g. Abu Bakr Mahmoud"))
+                job_title = to_english_str(st.text_input("المسمى الوظيفي (Job Title)", value=target_data['job_title'], placeholder="e.g. Sales Casual"))
+                branch = to_english_str(st.text_input("اسم الفرع (Branch)", value=target_data['branch'], placeholder="e.g. Park-St Branch"))
+                grading = to_english_str(st.text_input("الدرجة الوظيفية (Grading System)", value=target_data['grading'], placeholder="e.g. G1 - L1"))
+                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", value=target_data['direct_manager'], placeholder="e.g. Sherif S. El-Sayed"))
+                reason = to_english_str(st.text_input("سبب الاستقالة (Reason for Leaving)", value=target_data['reason'], placeholder="e.g. Education"))
                 
             with col2:
-                hiring_date = st.date_input("تاريخ التعيين (Hiring Date)", target_data['hiring_date'])
-                resignation_date = st.date_input("تاريخ تقديم الاستقالة (Resignation Date)", target_data['resignation_date'])
-                last_working_day = st.date_input("آخر يوم عمل (Last Working Day)", target_data['last_working_day'])
-                net_pay = st.number_input("إجمالي المستحقات (Total Net Pay EGP)", value=int(target_data['net_pay']), step=500)
-                notice_period = to_english_str(st.text_input("فترة الإشعار (Notice Period Status)", target_data['notice_period']))
-                handover_status = to_english_str(st.text_input("حالة التسليم (Handover Status)", target_data['handover_status']))
+                hiring_date = st.date_input("تاريخ التعيين (Hiring Date)", value=target_data['hiring_date'])
+                resignation_date = st.date_input("تاريخ تقديم الاستقالة (Resignation Date)", value=target_data['resignation_date'])
+                last_working_day = st.date_input("آخر يوم عمل (Last Working Day)", value=target_data['last_working_day'])
+                net_pay = st.number_input("إجمالي المستحقات (Total Net Pay EGP)", value=int(target_data['net_pay']) if target_data['net_pay'] is not None else 0, step=500)
+                notice_period = to_english_str(st.text_input("فترة الإشعار (Notice Period Status)", value=target_data['notice_period'], placeholder="e.g. One Month"))
+                handover_status = to_english_str(st.text_input("حالة التسليم (Handover Status)", value=target_data['handover_status'], placeholder="e.g. Team Leader"))
 
             col3, col4 = st.columns(2)
             with col3:
                 absence_days = st.number_input("أيام الغياب (Absence Days)", value=int(target_data['absence_days']))
-            with col4:
                 loan_balance = st.number_input("رصيد السلفة (Loan Balance EGP)", value=int(target_data['loan_balance']))
+            with col4:
+                uploaded_photo = st.file_uploader("🖼️ رفع صورة شخصية للموظف (Upload Photo)", type=["png", "jpg", "jpeg"])
 
             save_btn = st.form_submit_button("💾 حفظ البيانات والتحديث", type="primary")
 
             if save_btn:
+                # Convert uploaded photo to Base64
+                if uploaded_photo is not None:
+                    photo_b64 = base64.b64encode(uploaded_photo.getvalue()).decode()
+                else:
+                    photo_b64 = target_data.get('photo_b64')
+
                 new_id = target_data['id'] if target_data['id'] else (max([r['id'] for r in st.session_state.resignations_db], default=0) + 1)
                 
                 updated_record = {
                     "id": new_id,
-                    "employee_name": emp_name,
+                    "employee_name": emp_name if emp_name else "Unnamed Employee",
                     "job_title": job_title,
                     "branch": branch,
                     "grading": grading,
@@ -387,7 +400,8 @@ with tab_manage:
                     "notice_period": notice_period,
                     "handover_status": handover_status,
                     "absence_days": absence_days,
-                    "loan_balance": loan_balance
+                    "loan_balance": loan_balance,
+                    "photo_b64": photo_b64
                 }
 
                 if action_type == "تعديل بيانات استقالة ✏️" and target_data['id']:
