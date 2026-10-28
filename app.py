@@ -65,7 +65,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper Function
+# Helper Function for Num Conversion
 def to_english_str(text):
     if not text:
         return ""
@@ -79,6 +79,7 @@ if 'resignations_db' not in st.session_state:
     st.session_state.resignations_db = [
         {
             "id": 1,
+            "recipient_name": "Mohamed",
             "employee_name": "Abu Bakr Muhammad Mahmoud",
             "job_title": "Sales Casual",
             "branch": "Park-St Branch",
@@ -127,12 +128,21 @@ with tab_main:
         r_date = data['resignation_date'].strftime("%d/%m/%Y")
         l_date = data['last_working_day'].strftime("%d/%m/%Y")
         r_date_header = data['resignation_date'].strftime("%d %b %Y")
-        mgr_first = data['direct_manager'].split()[0] if data['direct_manager'] else 'Manager'
-
-        if data.get('photo_b64'):
-            img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:55px; height:55px; border-radius:6px; object-fit:cover;" />'
+        
+        # Recipient Name for "Dear Mr. [Recipient]"
+        recipient = data.get('recipient_name', '').strip()
+        if not recipient:
+            recipient = "Mohamed"
+        if not recipient.lower().startswith("mr.") and not recipient.lower().startswith("ms."):
+            recipient_title = f"Mr. {recipient}"
         else:
-            img_html = '<div style="width:50px; height:50px; background:#EADBCE; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:24px;">👤</div>'
+            recipient_title = recipient
+
+        # Photo HTML Component in 4x6 Portrait Ratio (e.g. 100px x 133px)
+        if data.get('photo_b64'):
+            img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:105px; height:140px; border-radius:8px; object-fit:cover; border:1px solid #D6C2A7;" />'
+        else:
+            img_html = '<div style="width:105px; height:140px; background:#EADBCE; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:42px; border:1px solid #D6C2A7;">👤</div>'
 
         html_content = f"""
         <!DOCTYPE html>
@@ -150,7 +160,7 @@ with tab_main:
                     background-color: #8C5A2B;
                     color: white;
                     border: none;
-                    padding: 10px 20px;
+                    padding: 11px 22px;
                     border-radius: 8px;
                     font-weight: bold;
                     font-size: 14px;
@@ -159,7 +169,8 @@ with tab_main:
                     display: inline-flex;
                     align-items: center;
                     gap: 8px;
-                    box-shadow: 0px 2px 6px rgba(0,0,0,0.15);
+                    box-shadow: 0px 3px 8px rgba(140, 90, 43, 0.3);
+                    transition: 0.2s;
                 }}
                 .print-btn:hover {{
                     background-color: #704721;
@@ -168,7 +179,7 @@ with tab_main:
                     background-color: #FAF8F5;
                     border: 1.5px solid #D6C2A7;
                     border-radius: 12px;
-                    padding: 20px;
+                    padding: 22px;
                     max-width: 800px;
                     margin: 0 auto;
                     box-shadow: 0px 4px 15px rgba(0,0,0,0.05);
@@ -200,7 +211,7 @@ with tab_main:
                     background-color: #8C5A2B;
                     color: white;
                     border-radius: 14px;
-                    padding: 4px 8px;
+                    padding: 5px 8px;
                     text-align: center;
                     font-weight: 700;
                     font-size: 11px;
@@ -219,30 +230,30 @@ with tab_main:
                 @media print {{
                     .no-print {{ display: none !important; }}
                     body {{ background: white; padding: 0; }}
-                    .a4-card {{ border: none; box-shadow: none; width: 100%; max-width: 100%; }}
+                    .a4-card {{ border: none; box-shadow: none; width: 100%; max-width: 100%; padding: 0; }}
                 }}
             </style>
         </head>
         <body>
             <div style="text-align: right;" class="no-print">
-                <button onclick="window.print()" class="print-btn">🖨️ طباعة / حفظ A4 PDF</button>
+                <button onclick="window.print()" class="print-btn">🖨️ حفظ كملف PDF على سطح المكتب (Save to Desktop)</button>
             </div>
 
             <div class="a4-card">
-                <table style="width:100%; border:none; margin-bottom:10px;">
+                <table style="width:100%; border:none; margin-bottom:12px;">
                     <tr>
-                        <td style="width:58%; vertical-align:top; border:none;">
-                            <div style="color:#8C5A2B; font-size:15px; font-weight:700;">Dear Mr. {mgr_first},</div>
+                        <td style="width:55%; vertical-align:top; border:none;">
+                            <div style="color:#8C5A2B; font-size:16px; font-weight:700; margin-bottom:4px;">Dear {recipient_title},</div>
                             <div style="color:#8C5A2B; font-weight:800; font-size:24px; line-height:1.1;">RESIGNATION<br>APPROVAL REQUEST</div>
                         </td>
-                        <td style="width:42%; vertical-align:top; border:none;">
-                            <div style="background:#FAF8F5; border:1px solid #D6C2A7; border-radius:8px; padding:8px; display:flex; gap:10px; align-items:center;">
+                        <td style="width:45%; vertical-align:top; border:none;">
+                            <div style="background:#FAF8F5; border:1px solid #D6C2A7; border-radius:10px; padding:10px; display:flex; gap:12px; align-items:center;">
                                 {img_html}
                                 <div>
-                                    <div style="font-size:10px; text-transform:uppercase; color:#8C5A2B; font-weight:800;">EMPLOYEE PROFILE</div>
-                                    <div style="font-size:16px; font-weight:800; color:#111;">{data['employee_name']}</div>
+                                    <div style="font-size:10px; text-transform:uppercase; color:#8C5A2B; font-weight:800; letter-spacing:0.5px;">EMPLOYEE PROFILE</div>
+                                    <div style="font-size:16px; font-weight:800; color:#111; margin:3px 0;">{data['employee_name']}</div>
                                     <div style="font-size:12px; color:#444;">{data['job_title']}</div>
-                                    <div style="font-size:11px; color:#666;">Resigning {r_date_header}</div>
+                                    <div style="font-size:11px; color:#666; margin-top:4px;">Resigning {r_date_header}</div>
                                 </div>
                             </div>
                         </td>
@@ -303,7 +314,7 @@ with tab_main:
         </body>
         </html>
         """
-        components.html(html_content, height=880, scrolling=True)
+        components.html(html_content, height=920, scrolling=True)
 
 # ---------------------------------------------------------
 # TAB 2: EDIT & MANAGE RESIGNATIONS
@@ -333,6 +344,7 @@ with tab_manage:
         else:
             target_data = {
                 "id": None,
+                "recipient_name": "",
                 "employee_name": "",
                 "job_title": "",
                 "branch": "",
@@ -350,8 +362,16 @@ with tab_manage:
                 "photo_b64": None
             }
 
-        # Form with EMPTY placeholders
         with st.form("resignation_form"):
+            st.markdown("##### 📩 بيانات الموجه إليه الطلب والمدير المباشر")
+            col_rec1, col_rec2 = st.columns(2)
+            with col_rec1:
+                recipient_input = to_english_str(st.text_input("اسم المرسل إليه / الموجه له الطلب (Recipient Name)", value=target_data.get('recipient_name', '')))
+            with col_rec2:
+                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", value=target_data['direct_manager']))
+
+            st.markdown("---")
+            st.markdown("##### 👤 بيانات الموظف والوظيفة")
             col1, col2 = st.columns(2)
             
             with col1:
@@ -359,7 +379,6 @@ with tab_manage:
                 job_title = to_english_str(st.text_input("المسمى الوظيفي (Job Title)", value=target_data['job_title']))
                 branch = to_english_str(st.text_input("اسم الفرع (Branch)", value=target_data['branch']))
                 grading = to_english_str(st.text_input("الدرجة الوظيفية (Grading System)", value=target_data['grading']))
-                direct_manager = to_english_str(st.text_input("المدير المباشر (Direct Manager)", value=target_data['direct_manager']))
                 reason = to_english_str(st.text_input("سبب الاستقالة (Reason for Leaving)", value=target_data['reason']))
                 
             with col2:
@@ -367,11 +386,11 @@ with tab_manage:
                 resignation_date = st.date_input("تاريخ تقديم الاستقالة (Resignation Date)", value=target_data['resignation_date'])
                 last_working_day = st.date_input("آخر يوم عمل (Last Working Day)", value=target_data['last_working_day'])
                 
-                # Dynamic calculation display for Total Experience
-                calculated_exp = (last_working_day - hiring_date).days
-                if calculated_exp < 0:
-                    calculated_exp = 0
-                st.info(f"🏆 إجمالي فترة الخبرة (Total Experience): **{calculated_exp} يوم** (تحسب تلقائياً من تاريخ التعيين وآخر يوم عمل)")
+                # Dynamic calculation for Total Experience
+                calc_exp = (last_working_day - hiring_date).days
+                if calc_exp < 0:
+                    calc_exp = 0
+                st.info(f"🏆 إجمالي الخبرة (Total Experience): **{calc_exp} Days** (تحسب تلقائياً من تاريخ التعيين وآخر يوم عمل)")
                 
                 net_pay = st.number_input("إجمالي المستحقات (Total Net Pay EGP)", value=int(target_data['net_pay']), step=500)
                 notice_period = to_english_str(st.text_input("فترة الإشعار (Notice Period Status)", value=target_data['notice_period']))
@@ -382,7 +401,7 @@ with tab_manage:
                 absence_days = st.number_input("أيام الغياب (Absence Days)", value=int(target_data['absence_days']))
                 loan_balance = st.number_input("رصيد السلفة (Loan Balance EGP)", value=int(target_data['loan_balance']))
             with col4:
-                uploaded_photo = st.file_uploader("🖼️ رفع صورة شخصية للموظف (Upload Photo)", type=["png", "jpg", "jpeg"])
+                uploaded_photo = st.file_uploader("🖼️ رفع صورة شخصية للموظف (Upload Photo 4x6)", type=["png", "jpg", "jpeg"])
 
             save_btn = st.form_submit_button("💾 حفظ البيانات والتحديث", type="primary")
 
@@ -396,6 +415,7 @@ with tab_manage:
                 
                 updated_record = {
                     "id": new_id,
+                    "recipient_name": recipient_input,
                     "employee_name": emp_name if emp_name else "Unnamed Employee",
                     "job_title": job_title,
                     "branch": branch,
@@ -438,12 +458,13 @@ with tab_dashboard:
             if exp < 0:
                 exp = 0
             records.append({
+                "المرسل إليه": r.get('recipient_name', ''),
                 "اسم الموظف": r['employee_name'],
                 "الفرع": r['branch'],
                 "المسمى الوظيفي": r['job_title'],
                 "تاريخ التعيين": r['hiring_date'].strftime("%Y-%m-%d"),
                 "آخر يوم عمل": r['last_working_day'].strftime("%Y-%m-%d"),
-                "فترة الخبرة (يوم)": exp,
+                "إجمالي الخبرة (يوم)": exp,
                 "إجمالي المستحقات (EGP)": r['net_pay'],
                 "سبب الاستقالة": r['reason'],
                 "المدير المباشر": r['direct_manager']
@@ -455,7 +476,7 @@ with tab_dashboard:
         m1.metric("إجمالي الاستقالات", len(df))
         m2.metric("عدد الفروع", df['الفرع'].nunique())
         m3.metric("إجمالي المستحقات (EGP)", f"{df['إجمالي المستحقات (EGP)'].sum():,}")
-        m4.metric("متوسط الخبرة (يوم)", f"{int(df['فترة الخبرة (يوم)'].mean())} يوم")
+        m4.metric("متوسط الخبرة (يوم)", f"{int(df['إجمالي الخبرة (يوم)'].mean())} يوم")
 
         st.markdown("---")
 
