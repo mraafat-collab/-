@@ -3,6 +3,11 @@ import pandas as pd
 from datetime import date
 import streamlit.components.v1 as components
 import base64
+import io
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from docx import Document
 
 # ---------------------------------------------------------
 # Page Configuration
@@ -65,7 +70,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper Function for Num Conversion
+# Helper Function
 def to_english_str(text):
     if not text:
         return ""
@@ -73,6 +78,54 @@ def to_english_str(text):
     english_num = "0123456789"
     trans = str.maketrans(arabic_num, english_num)
     return str(text).translate(trans)
+
+# Helper to generate Word Document (.docx)
+def generate_word_doc(data, exp_days):
+    doc = Document()
+    doc.add_heading(f"RESIGNATION APPROVAL REQUEST - {data['employee_name']}", 0)
+    
+    doc.add_paragraph(f"Recipient: Dear {data.get('recipient_name', 'Manager')}")
+    doc.add_paragraph(f"Employee Name: {data['employee_name']}")
+    doc.add_paragraph(f"Job Title: {data['job_title']}")
+    doc.add_paragraph(f"Branch: {data['branch']}")
+    doc.add_paragraph(f"Hiring Date: {data['hiring_date'].strftime('%d/%m/%Y')}")
+    doc.add_paragraph(f"Resignation Date: {data['resignation_date'].strftime('%d/%m/%Y')}")
+    doc.add_paragraph(f"Last Working Day: {data['last_working_day'].strftime('%d/%m/%Y')}")
+    doc.add_paragraph(f"Total Experience: {exp_days} Days")
+    doc.add_paragraph(f"Total Net Pay: {data['net_pay']} EGP")
+    doc.add_paragraph(f"Reason for Leaving: {data['reason']}")
+    doc.add_paragraph(f"Direct Manager: {data['direct_manager']}")
+    doc.add_paragraph(f"Notice Period Status: {data['notice_period']}")
+    doc.add_paragraph(f"Handover Status: {data['handover_status']}")
+    
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+# Helper to generate Excel (.xlsx)
+def generate_excel(data, exp_days):
+    df_single = pd.DataFrame([{
+        "Recipient Name": data.get('recipient_name', ''),
+        "Employee Name": data['employee_name'],
+        "Branch": data['branch'],
+        "Job Title": data['job_title'],
+        "Hiring Date": data['hiring_date'].strftime('%Y-%m-%d'),
+        "Resignation Date": data['resignation_date'].strftime('%Y-%m-%d'),
+        "Last Working Day": data['last_working_day'].strftime('%Y-%m-%d'),
+        "Total Experience (Days)": exp_days,
+        "Grading System": data['grading'],
+        "Total Net Pay (EGP)": data['net_pay'],
+        "Reason": data['reason'],
+        "Notice Period Status": data['notice_period'],
+        "Handover Status": data['handover_status'],
+        "Direct Manager": data['direct_manager'],
+        "Absence Days": data['absence_days'],
+        "Loan Balance EGP": data['loan_balance']
+    }])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_single.to_excel(writer, index=False, sheet_name='Resignation')
+    return output.getvalue()
 
 # Initializing Session Database
 if 'resignations_db' not in st.session_state:
@@ -108,7 +161,7 @@ tab_main, tab_manage, tab_dashboard = st.tabs([
 ])
 
 # ---------------------------------------------------------
-# TAB 1: DISPLAY & PRINT A4 TEMPLATE
+# TAB 1: DISPLAY & EXPORT A4 TEMPLATE
 # ---------------------------------------------------------
 with tab_main:
     if not st.session_state.resignations_db:
@@ -119,7 +172,6 @@ with tab_main:
 
         data = next(item for item in st.session_state.resignations_db if item["id"] == selected_id)
 
-        # Calculation of Total Experience based on Last Working Day - Hiring Date
         exp_days = (data['last_working_day'] - data['hiring_date']).days
         if exp_days < 0:
             exp_days = 0
@@ -129,7 +181,6 @@ with tab_main:
         l_date = data['last_working_day'].strftime("%d/%m/%Y")
         r_date_header = data['resignation_date'].strftime("%d %b %Y")
         
-        # Recipient Name for "Dear Mr. [Recipient]"
         recipient = data.get('recipient_name', '').strip()
         if not recipient:
             recipient = "Mohamed"
@@ -138,7 +189,36 @@ with tab_main:
         else:
             recipient_title = recipient
 
-        # Photo HTML Component in 4x6 Portrait Ratio (e.g. 100px x 133px)
+        # --- EXPORT TOOLBAR ---
+        st.markdown("#### 📥 خيارات الحفظ، التصدير، والطباعة [Save & Export Options]:")
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
+        with col_btn1:
+            word_bytes = generate_word_doc(data, exp_days)
+            st.download_button(
+                label="📄 حفظ كملف Word (.docx)",
+                data=word_bytes,
+                file_name=f"Resignation_{data['employee_name']}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+            
+        with col_btn2:
+            excel_bytes = generate_excel(data, exp_days)
+            st.download_button(
+                label="📊 حفظ كملف Excel (.xlsx)",
+                data=excel_bytes,
+                file_name=f"Resignation_{data['employee_name']}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+        with col_btn3:
+            st.info("💡 للطباعة أو الحفظ كـ PDF: استخدم زر الطباعة داخل النافذة بالأسفل واختر Save as PDF.")
+
+        st.markdown("---")
+
+        # Photo HTML Component 4x6
         if data.get('photo_b64'):
             img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:105px; height:140px; border-radius:8px; object-fit:cover; border:1px solid #D6C2A7;" />'
         else:
@@ -170,11 +250,8 @@ with tab_main:
                     align-items: center;
                     gap: 8px;
                     box-shadow: 0px 3px 8px rgba(140, 90, 43, 0.3);
-                    transition: 0.2s;
                 }}
-                .print-btn:hover {{
-                    background-color: #704721;
-                }}
+                .print-btn:hover {{ background-color: #704721; }}
                 .a4-card {{
                     background-color: #FAF8F5;
                     border: 1.5px solid #D6C2A7;
@@ -204,9 +281,7 @@ with tab_main:
                     font-size: 12px;
                     color: #222;
                 }}
-                .custom-table tr:nth-child(even) {{
-                    background-color: #FAF8F5;
-                }}
+                .custom-table tr:nth-child(even) {{ background-color: #FAF8F5; }}
                 .metric-badge {{
                     background-color: #8C5A2B;
                     color: white;
@@ -236,7 +311,7 @@ with tab_main:
         </head>
         <body>
             <div style="text-align: right;" class="no-print">
-                <button onclick="window.print()" class="print-btn">🖨️ حفظ كملف PDF على سطح المكتب (Save to Desktop)</button>
+                <button onclick="window.print()" class="print-btn">🖨️ طباعة التقرير / حفظ PDF على الديسك توب</button>
             </div>
 
             <div class="a4-card">
@@ -314,7 +389,57 @@ with tab_main:
         </body>
         </html>
         """
-        components.html(html_content, height=920, scrolling=True)
+        components.html(html_content, height=930, scrolling=True)
+
+        # EMAIL TEMPLATE SECTION
+        with st.expander("📧 إرسال التقرير عبر البريد الإلكتروني (Send via Email)"):
+            c_e1, c_e2 = st.columns(2)
+            with c_e1:
+                sender = st.text_input("بريد المرسل (Sender Email)")
+                pwd = st.text_input("كلمة مرور التطبيق (App Password)", type="password")
+            with c_e2:
+                receiver = st.text_input("بريد المستلم (Receiver Email)")
+                smtp_host = st.text_input("سيرفر SMTP", value="smtp.gmail.com")
+
+            if st.button("🚀 إرسال التقرير بالإيميل"):
+                if sender and pwd and receiver:
+                    try:
+                        msg = MIMEMultipart('alternative')
+                        msg['Subject'] = f"Resignation Approval Request - {data['employee_name']}"
+                        msg['From'] = sender
+                        msg['To'] = receiver
+                        
+                        email_html = f"""
+                        <html>
+                        <body style="font-family: Arial, sans-serif; background-color: #F8F6F0; padding: 20px;">
+                            <div style="background-color: #FAF8F5; border: 1px solid #D6C2A7; padding: 20px; border-radius: 10px; max-width: 600px; margin: auto;">
+                                <h3 style="color: #8C5A2B;">Dear {recipient_title},</h3>
+                                <h2 style="color: #8C5A2B;">RESIGNATION APPROVAL REQUEST</h2>
+                                <hr style="border: 1px solid #EADBCE;">
+                                <p><b>Employee Name:</b> {data['employee_name']}</p>
+                                <p><b>Branch:</b> {data['branch']}</p>
+                                <p><b>Job Title:</b> {data['job_title']}</p>
+                                <p><b>Hiring Date:</b> {h_date}</p>
+                                <p><b>Last Working Day:</b> {l_date}</p>
+                                <p><b>Total Experience:</b> {exp_days} Days</p>
+                                <p><b>Total Net Pay:</b> {data['net_pay']} EGP</p>
+                                <p><b>Reason for Leaving:</b> {data['reason']}</p>
+                                <p><b>Direct Manager:</b> {data['direct_manager']}</p>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                        msg.attach(MIMEText(email_html, 'html'))
+                        server = smtplib.SMTP(smtp_host, 587)
+                        server.starttls()
+                        server.login(sender, pwd)
+                        server.sendmail(sender, receiver, msg.as_string())
+                        server.quit()
+                        st.success("✅ تم إرسال الإيميل بنجاح!")
+                    except Exception as e:
+                        st.error(f"❌ فشل إرسال الإيميل: {e}")
+                else:
+                    st.error("يرجى ملء جميع بيانات الإيميل.")
 
 # ---------------------------------------------------------
 # TAB 2: EDIT & MANAGE RESIGNATIONS
@@ -386,7 +511,6 @@ with tab_manage:
                 resignation_date = st.date_input("تاريخ تقديم الاستقالة (Resignation Date)", value=target_data['resignation_date'])
                 last_working_day = st.date_input("آخر يوم عمل (Last Working Day)", value=target_data['last_working_day'])
                 
-                # Dynamic calculation for Total Experience
                 calc_exp = (last_working_day - hiring_date).days
                 if calc_exp < 0:
                     calc_exp = 0
