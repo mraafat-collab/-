@@ -519,4 +519,7 @@ with tab_audit:
     st.subheader("🧾 Activity history")
     logs = run("SELECT ts AS Time, rid AS ID, action AS Action, detail AS Detail FROM audit ORDER BY id DESC LIMIT 500",
                fetch="all")
-    st.dataframe(pd.DataFrame(logs), use_container_width=True, hide_index=True) if logs else st.info("No activity yet.")
+    if logs:
+        st.dataframe(pd.DataFrame(logs), use_container_width=True, hide_index=True)
+    else:
+        st.info("No activity yet.")
