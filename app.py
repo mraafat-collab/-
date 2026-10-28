@@ -33,7 +33,7 @@ st.markdown("""
         background-color: #F8F6F0;
     }
 
-    /* Rectangular Glowing Top Navigation Tabs */
+    /* Glowing Rectangular Top Navigation Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 12px;
         background-color: transparent;
@@ -79,7 +79,7 @@ def to_english_str(text):
     trans = str.maketrans(arabic_num, english_num)
     return str(text).translate(trans)
 
-# Helper to generate Word Document (.docx)
+# Helper for Word (.docx)
 def generate_word_doc(data, exp_days):
     doc = Document()
     doc.add_heading(f"RESIGNATION APPROVAL REQUEST - {data['employee_name']}", 0)
@@ -102,7 +102,7 @@ def generate_word_doc(data, exp_days):
     doc.save(bio)
     return bio.getvalue()
 
-# Helper to generate Excel (.xlsx)
+# Helper for Excel (.xlsx)
 def generate_excel(data, exp_days):
     df_single = pd.DataFrame([{
         "Recipient Name": data.get('recipient_name', ''),
@@ -127,7 +127,7 @@ def generate_excel(data, exp_days):
         df_single.to_excel(writer, index=False, sheet_name='Resignation')
     return output.getvalue()
 
-# Initializing Session Database
+# Database Initialization
 if 'resignations_db' not in st.session_state:
     st.session_state.resignations_db = [
         {
@@ -152,7 +152,7 @@ if 'resignations_db' not in st.session_state:
     ]
 
 # ---------------------------------------------------------
-# Top Navigation Bar (Glowing Tabs)
+# Top Navigation Bar
 # ---------------------------------------------------------
 tab_main, tab_manage, tab_dashboard = st.tabs([
     "🏠 عرض وطباعة الاستقالة (A4)", 
@@ -189,9 +189,9 @@ with tab_main:
         else:
             recipient_title = recipient
 
-        # --- EXPORT TOOLBAR ---
-        st.markdown("#### 📥 خيارات الحفظ، التصدير، والطباعة [Save & Export Options]:")
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        # Export Toolbar
+        st.markdown("#### 📥 خيارات الحفظ والتصدير [Export & Save Options]:")
+        col_btn1, col_btn2 = st.columns(2)
         
         with col_btn1:
             word_bytes = generate_word_doc(data, exp_days)
@@ -213,21 +213,19 @@ with tab_main:
                 use_container_width=True
             )
 
-        with col_btn3:
-            st.info("💡 للطباعة أو الحفظ كـ PDF: استخدم زر الطباعة داخل النافذة بالأسفل واختر Save as PDF.")
-
         st.markdown("---")
 
-        # Photo HTML Component 4x6
         if data.get('photo_b64'):
             img_html = f'<img src="data:image/png;base64,{data["photo_b64"]}" style="width:105px; height:140px; border-radius:8px; object-fit:cover; border:1px solid #D6C2A7;" />'
         else:
             img_html = '<div style="width:105px; height:140px; background:#EADBCE; border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:42px; border:1px solid #D6C2A7;">👤</div>'
 
+        # Dynamic Render with html2canvas Image Generator & PDF Print Engine
         html_content = f"""
         <!DOCTYPE html>
         <html>
         <head>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
                 body {{
@@ -236,22 +234,27 @@ with tab_main:
                     margin: 0;
                     padding: 10px;
                 }}
-                .print-btn {{
+                .btn-group {{
+                    display: flex;
+                    gap: 10px;
+                    justify-content: flex-end;
+                    margin-bottom: 15px;
+                }}
+                .action-btn {{
                     background-color: #8C5A2B;
                     color: white;
                     border: none;
-                    padding: 11px 22px;
+                    padding: 11px 20px;
                     border-radius: 8px;
                     font-weight: bold;
-                    font-size: 14px;
+                    font-size: 13px;
                     cursor: pointer;
-                    margin-bottom: 15px;
                     display: inline-flex;
                     align-items: center;
-                    gap: 8px;
+                    gap: 6px;
                     box-shadow: 0px 3px 8px rgba(140, 90, 43, 0.3);
                 }}
-                .print-btn:hover {{ background-color: #704721; }}
+                .action-btn:hover {{ background-color: #704721; }}
                 .a4-card {{
                     background-color: #FAF8F5;
                     border: 1.5px solid #D6C2A7;
@@ -310,11 +313,12 @@ with tab_main:
             </style>
         </head>
         <body>
-            <div style="text-align: right;" class="no-print">
-                <button onclick="window.print()" class="print-btn">🖨️ طباعة التقرير / حفظ PDF على الديسك توب</button>
+            <div class="btn-group no-print">
+                <button onclick="downloadAsImage()" class="action-btn">🖼️ تنزيل كصورة (PNG)</button>
+                <button onclick="window.print()" class="action-btn">🖨️ طباعة / حفظ كـ PDF</button>
             </div>
 
-            <div class="a4-card">
+            <div id="capture-card" class="a4-card">
                 <table style="width:100%; border:none; margin-bottom:12px;">
                     <tr>
                         <td style="width:55%; vertical-align:top; border:none;">
@@ -386,13 +390,25 @@ with tab_main:
                     </div>
                 </div>
             </div>
+
+            <script>
+                function downloadAsImage() {{
+                    const element = document.getElementById("capture-card");
+                    html2canvas(element, {{ scale: 2 }}).then(canvas => {{
+                        const link = document.createElement("a");
+                        link.download = "Resignation_{data['employee_name']}.png";
+                        link.href = canvas.toDataURL("image/png");
+                        link.click();
+                    }});
+                }}
+            </script>
         </body>
         </html>
         """
-        components.html(html_content, height=930, scrolling=True)
+        components.html(html_content, height=940, scrolling=True)
 
         # EMAIL TEMPLATE SECTION
-        with st.expander("📧 إرسال التقرير عبر البريد الإلكتروني (Send via Email)"):
+        with st.expander("📧 إرسال / نسخ قالب الإيميل (Email Options)"):
             c_e1, c_e2 = st.columns(2)
             with c_e1:
                 sender = st.text_input("بريد المرسل (Sender Email)")
@@ -401,7 +417,7 @@ with tab_main:
                 receiver = st.text_input("بريد المستلم (Receiver Email)")
                 smtp_host = st.text_input("سيرفر SMTP", value="smtp.gmail.com")
 
-            if st.button("🚀 إرسال التقرير بالإيميل"):
+            if st.button("🚀 إرسال التقرير مباشرة بالإيميل"):
                 if sender and pwd and receiver:
                     try:
                         msg = MIMEMultipart('alternative')
