@@ -198,78 +198,157 @@ def to_df(rows):
     return pd.DataFrame(out)
 
 
-# --------------------------------------------------------------- A4 card UI
-CSS = """
+# --------------------------------------------------------------- THEME + A4 card UI
+PALETTES = {
+    "Espresso": dict(main="#8C5A2B", dark="#5E3A1A", soft="#F3E9DD", bg="#FAF7F2", line="#E3D3BF"),
+    "Ocean": dict(main="#1F6FEB", dark="#134B9E", soft="#E6F0FF", bg="#F4F8FD", line="#CFE0FA"),
+    "Emerald": dict(main="#12805C", dark="#0B5A41", soft="#E3F5EE", bg="#F3F9F6", line="#C9E8DC"),
+    "Royal": dict(main="#6D3FD1", dark="#4A2699", soft="#EEE7FB", bg="#F7F4FD", line="#DCCFF6"),
+    "Rose": dict(main="#D1325B", dark="#9B1F42", soft="#FCE6EC", bg="#FCF5F7", line="#F5CFD9"),
+}
+P = PALETTES["Espresso"]
+
+
+def _tok(css, p):
+    for k, t in (("main", "__M__"), ("dark", "__D__"), ("soft", "__S__"), ("bg", "__BG__"), ("line", "__L__")):
+        css = css.replace(t, p[k])
+    return css
+
+
+THEME_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
-html,body,[class*="css"]{font-family:'Inter',sans-serif}
-.stApp{background:#F8F6F0}
-.stTabs [data-baseweb="tab-list"]{gap:12px;padding-bottom:12px;border-bottom:2px solid #EADBCE}
-.stTabs [data-baseweb="tab"]{height:46px;background:#fff;border-radius:8px;color:#8C5A2B;font-weight:700;
-  border:1.5px solid #D6C2A7;padding:0 22px;transition:all .2s}
-.stTabs [data-baseweb="tab"]:hover{transform:translateY(-2px);border-color:#8C5A2B}
-.stTabs [aria-selected="true"]{background:#8C5A2B!important;color:#fff!important;box-shadow:0 4px 12px rgba(140,90,43,.4)}
+html,body,[class*="css"],.stApp{font-family:'Inter',sans-serif}
+.stApp{background:radial-gradient(1100px 480px at 92% -8%,__S__ 0%,transparent 62%),__BG__}
+#MainMenu,footer{visibility:hidden}
+header[data-testid="stHeader"]{background:transparent}
+.block-container{padding-top:1.6rem;max-width:1250px;animation:up .5s ease}
+@keyframes up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+h1,h2,h3,h4{color:__D__;font-weight:800}
+
+.hero{display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;color:#fff;
+ background:linear-gradient(120deg,__D__,__M__ 72%);border-radius:22px;padding:26px 32px;margin-bottom:20px;
+ box-shadow:0 18px 38px -16px __M__;position:relative;overflow:hidden}
+.hero:after{content:"";position:absolute;right:-70px;top:-90px;width:280px;height:280px;border-radius:50%;background:rgba(255,255,255,.09)}
+.hero:before{content:"";position:absolute;right:140px;bottom:-110px;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.06)}
+.hero-sub{font-size:12px;letter-spacing:.2em;opacity:.8;font-weight:700}
+.hero-title{font-size:30px;font-weight:800;line-height:1.15;margin:4px 0}
+.hero-note{font-size:13px;opacity:.85}
+.chips{display:flex;gap:10px;position:relative;z-index:1}
+.chip{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);border-radius:16px;padding:10px 18px;text-align:center;min-width:82px}
+.chip b{display:block;font-size:26px;font-weight:800}
+.chip span{font-size:11px;opacity:.9;text-transform:uppercase;letter-spacing:.08em}
+
+.stTabs [data-baseweb="tab-list"]{gap:6px;background:#fff;padding:6px;border-radius:16px;border:1px solid __L__;
+ box-shadow:0 8px 20px -12px rgba(0,0,0,.3);width:fit-content}
+.stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"]{display:none}
+.stTabs [data-baseweb="tab"]{height:42px;border-radius:12px;padding:0 22px;font-weight:700;color:__M__;background:transparent;transition:all .2s}
+.stTabs [data-baseweb="tab"]:hover{background:__S__}
+.stTabs [aria-selected="true"]{background:linear-gradient(135deg,__M__,__D__)!important;box-shadow:0 8px 18px -8px __M__}
+.stTabs [aria-selected="true"],.stTabs [aria-selected="true"] *{color:#fff!important}
+.stTabs [data-baseweb="tab-panel"]{padding-top:22px}
+
+[data-testid="stMetric"]{background:#fff;border:1px solid __L__;border-left:5px solid __M__;border-radius:14px;padding:14px 16px;
+ box-shadow:0 10px 22px -16px rgba(0,0,0,.35);transition:transform .2s}
+[data-testid="stMetric"]:hover{transform:translateY(-3px)}
+[data-testid="stMetricValue"]{color:__D__;font-weight:800}
+[data-testid="stExpander"],[data-testid="stForm"]{background:#fff;border:1px solid __L__!important;border-radius:16px;
+ box-shadow:0 10px 24px -18px rgba(0,0,0,.35)}
+[data-testid="stDataFrame"]{border:1px solid __L__;border-radius:14px;overflow:hidden}
+section[data-testid="stSidebar"]{background:#fff;border-right:1px solid __L__}
+
+.stButton>button,.stDownloadButton>button,.stFormSubmitButton>button{border-radius:12px;font-weight:700;border:1.5px solid __L__;transition:all .2s}
+.stButton>button:hover,.stDownloadButton>button:hover{border-color:__M__;color:__M__;transform:translateY(-1px)}
+button[kind="primary"],button[kind="primaryFormSubmit"],[data-testid="stBaseButton-primary"],[data-testid="stBaseButton-primaryFormSubmit"]{
+ background:linear-gradient(135deg,__M__,__D__)!important;color:#fff!important;border:0!important;box-shadow:0 8px 18px -8px __M__}
+[data-baseweb="input"],[data-baseweb="select"]>div,[data-baseweb="textarea"]{border-radius:10px!important}
+[data-baseweb="input"]:focus-within,[data-baseweb="select"]>div:focus-within{border-color:__M__!important;box-shadow:0 0 0 3px __S__}
+
+.pillrow{display:flex;align-items:center;gap:12px;margin:2px 0 14px}
+.pill{color:#fff;border-radius:999px;padding:4px 14px;font-size:12px;font-weight:700;letter-spacing:.05em}
+.meta{color:#777;font-size:12px}
 """
 
 CARD_CSS = """
-body{font-family:'Inter',sans-serif;background:#F8F6F0;margin:0;padding:10px}
+body{font-family:'Inter',sans-serif;background:transparent;margin:0;padding:8px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .btns{display:flex;gap:10px;justify-content:flex-end;margin-bottom:12px}
-.btn{background:#8C5A2B;color:#fff;border:0;padding:10px 18px;border-radius:8px;font-weight:700;cursor:pointer}
-.card{background:#FAF8F5;border:1.5px solid #D6C2A7;border-radius:12px;padding:22px;max-width:800px;margin:0 auto}
-.head{display:flex;justify-content:space-between;gap:12px}
-.profile{background:#fff;border:1px solid #D6C2A7;border-radius:10px;padding:10px;display:flex;gap:12px;align-items:center}
-.row{display:flex;gap:8px;margin-top:10px}.row>div{flex:1;text-align:center}
-.step{border:1px solid #D6C2A7;border-radius:8px;padding:6px;font-size:11px}
-.badge{background:#8C5A2B;color:#fff;border-radius:14px;padding:5px 8px;font-weight:700;font-size:11px;margin-bottom:4px}
-.box{border:1px solid #D6C2A7;border-radius:6px;padding:6px;font-weight:800;font-size:13px;background:#fff}
-table{width:100%;border-collapse:collapse;margin-top:10px;border:1px solid #D6C2A7}
-th{background:#8C5A2B;color:#fff;padding:6px 10px;text-align:left;font-size:12px}
-td{padding:5px 10px;border-bottom:1px solid #EADBCE;font-size:12px}
-tr:nth-child(even){background:#fff}
-.sig{display:flex;gap:20px;margin-top:26px;font-size:11px;color:#555}.sig div{flex:1;border-top:1px solid #999;padding-top:4px}
-@media print{.no-print{display:none!important}body{background:#fff;padding:0}.card{border:0;max-width:100%}}
+.btn{background:linear-gradient(135deg,__M__,__D__);color:#fff;border:0;padding:10px 18px;border-radius:10px;font-weight:700;cursor:pointer;box-shadow:0 6px 14px -6px __M__}
+.card{background:#fff;border:1px solid __L__;border-radius:18px;max-width:800px;margin:0 auto;overflow:hidden;box-shadow:0 18px 40px -22px rgba(0,0,0,.35)}
+.band{background:linear-gradient(120deg,__D__,__M__);color:#fff;padding:22px 26px;display:flex;justify-content:space-between;gap:14px;align-items:center}
+.band small{letter-spacing:.16em;font-size:10px;opacity:.8;font-weight:700}
+.band h1{margin:4px 0 10px;font-size:24px;line-height:1.12;font-weight:800}
+.pillc{display:inline-block;background:#fff;border-radius:999px;padding:3px 12px;font-size:11px;font-weight:800}
+.prof{display:flex;gap:12px;align-items:center;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.3);border-radius:14px;padding:10px}
+.body{padding:20px 26px 24px}
+.tl{display:flex;position:relative;margin:4px 0 18px}
+.tl:before{content:"";position:absolute;left:10%;right:10%;top:15px;height:3px;background:__L__}
+.step{flex:1;text-align:center;position:relative;font-size:11px}
+.dot{width:30px;height:30px;border-radius:50%;margin:0 auto 5px;background:__M__;color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;border:3px solid #fff;box-shadow:0 0 0 2px __M__}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.kpi{background:__S__;border-radius:12px;padding:10px 12px}
+.kpi small{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:__D__;font-weight:700;margin-bottom:2px}
+.kpi b{font-size:15px;color:#111}
+table{width:100%;border-collapse:collapse;margin-top:14px;border-radius:10px;overflow:hidden}
+th{background:__M__;color:#fff;padding:7px 12px;text-align:left;font-size:12px}
+td{padding:6px 12px;border-bottom:1px solid __L__;font-size:12px}
+tr:nth-child(even) td{background:__S__}
+.chk{margin-top:14px;border:1px solid __L__;border-radius:12px;padding:12px 14px}
+.prog{height:8px;background:__S__;border-radius:99px;overflow:hidden;margin:6px 0 10px}
+.prog i{display:block;height:100%;background:linear-gradient(90deg,__M__,__D__)}
+.sig{display:flex;gap:24px;margin-top:30px;font-size:11px;color:#666}.sig div{flex:1;border-top:1px solid #aaa;padding-top:4px}
+@media print{.no-print{display:none!important}body{padding:0}.card{box-shadow:none;border:0;max-width:100%}}
 """
+
+
+def theme_css(p):
+    return _tok(THEME_CSS, p)
+
+
+def card_css():
+    return _tok(CARD_CSS, P)
 
 
 def card_html(d, c, company):
     color = STATUS_COLOR[d["status"]]
     if d.get("photo"):
         mime = "image/png" if d["photo"][:4] == b"\x89PNG" else "image/jpeg"
-        img = f'<img src="data:{mime};base64,{base64.b64encode(d["photo"]).decode()}" style="width:105px;height:140px;object-fit:cover;border-radius:8px;border:1px solid #D6C2A7">'
+        img = (f'<img src="data:{mime};base64,{base64.b64encode(d["photo"]).decode()}" '
+               'style="width:84px;height:110px;object-fit:cover;border-radius:10px;border:2px solid #fff">')
     else:
-        img = '<div style="width:105px;height:140px;background:#EADBCE;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:42px">👤</div>'
+        img = ('<div style="width:84px;height:110px;background:rgba(255,255,255,.2);border-radius:10px;'
+               'display:flex;align-items:center;justify-content:center;font-size:36px">👤</div>')
     steps = [("👤", "Joined", fmt(d["hiring_date"])), ("🏆", "Experience", f"{c['exp']} Days"),
              ("📄", "Submitted", fmt(d["resignation_date"])), ("🕒", "Notice", d["notice_period"]),
              ("✅", "Status", d["status"])]
-    steps_html = "".join(f'<div class="step"><div style="font-size:16px">{i}</div><b>{esc(t)}</b><div>{esc(v)}</div></div>' for i, t, v in steps)
-    kpis = [("Total Net Pay (EGP)", f"{c['net']:,.0f}"), ("Last Working Day", fmt(d["last_working_day"])),
-            ("Reason", d["reason"]), ("Direct Manager", d["direct_manager"])]
-    kpi_html = "".join(f'<div><div class="badge">{esc(t)}</div><div class="box">{esc(v)}</div></div>' for t, v in kpis)
-    table = "".join(f"<tr><td style='width:40%'>{esc(k)}</td><td><b>{esc(v)}</b></td></tr>" for k, v in rows_for(d, c))
+    tl = "".join(f'<div class="step"><div class="dot">{i}</div><b>{esc(t)}</b><div style="color:#555">{esc(v)}</div></div>'
+                 for i, t, v in steps)
+    kpis = [("Net Pay (EGP)", f"{c['net']:,.0f}"), ("Last Day", fmt(d["last_working_day"])),
+            ("Reason", d["reason"]), ("Manager", d["direct_manager"])]
+    kpi_html = "".join(f'<div class="kpi"><small>{esc(t)}</small><b>{esc(v)}</b></div>' for t, v in kpis)
+    table = "".join(f"<tr><td style='width:38%'>{esc(k)}</td><td><b>{esc(v)}</b></td></tr>" for k, v in rows_for(d, c))
     todo = "".join(f"<div>{'☑' if i in c['done'] else '☐'} {esc(i)}</div>" for i in CHECKLIST)
-    warn = (f'<div style="margin-top:8px;color:#B3261E;font-weight:700;font-size:12px">⚠ Notice shortfall: {c["shortfall"]} days '
-            f'(required last day {fmt(c["required_last"])})</div>') if c["shortfall"] else ""
+    pct = int(100 * len(c["done"]) / len(CHECKLIST))
+    warn = (f'<div style="margin-top:10px;color:#B3261E;font-weight:700;font-size:12px">⚠ Notice shortfall: '
+            f'{c["shortfall"]} days (required last day {fmt(c["required_last"])})</div>') if c["shortfall"] else ""
     js = """<script>function dl(){html2canvas(document.getElementById('cap'),{scale:2}).then(c=>{const a=document.createElement('a');
-    a.download='Resignation___NAME__.png';a.href=c.toDataURL('image/png');a.click();});}</script>""".replace("__NAME__", esc(d["employee_name"]).replace(" ", "_"))
+    a.download='Resignation___NAME__.png';a.href=c.toDataURL('image/png');a.click();});}</script>""".replace(
+        "__NAME__", esc(d["employee_name"]).replace(" ", "_"))
     return f"""<html><head><script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <style>{CARD_CSS}</style></head><body>
-    <div class="btns no-print"><button class="btn" onclick="dl()">🖼️ PNG</button><button class="btn" onclick="window.print()">🖨️ Print / PDF</button></div>
-    <div id="cap" class="card">
-      <div class="head"><div><div style="color:#8C5A2B;font-weight:700">{esc(company)}</div>
-        <div style="color:#8C5A2B;font-weight:700;font-size:15px;margin:4px 0">Dear {esc(c['recipient'])},</div>
-        <div style="color:#8C5A2B;font-weight:800;font-size:24px;line-height:1.1">RESIGNATION<br>APPROVAL REQUEST</div>
-        <div style="display:inline-block;margin-top:8px;background:{color};color:#fff;border-radius:12px;padding:3px 12px;font-size:12px;font-weight:700">{esc(d['status']).upper()}</div></div>
-        <div class="profile">{img}<div><div style="font-size:10px;color:#8C5A2B;font-weight:800">EMPLOYEE PROFILE</div>
-        <div style="font-size:16px;font-weight:800">{esc(d['employee_name'])}</div>
-        <div style="font-size:12px;color:#444">{esc(d['job_title'])} · {esc(d['employee_code'])}</div>
-        <div style="font-size:11px;color:#666;margin-top:4px">{esc(d['branch'])}</div></div></div></div>
-      <div style="font-weight:800;margin:12px 0 6px">Resignation Journey</div><div class="row">{steps_html}</div>
-      <div class="row">{kpi_html}</div>{warn}
-      <table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>{table}</tbody></table>
-      <div style="background:#fff;border:1px solid #D6C2A7;border-radius:8px;padding:10px;margin-top:10px">
-        <div style="color:#8C5A2B;font-weight:800;font-size:13px">HANDOVER CHECKLIST ({len(c['done'])}/{len(CHECKLIST)})</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;margin-top:6px">{todo}</div></div>
-      <div class="sig"><div>Employee</div><div>Direct Manager</div><div>HR</div></div>
-    </div>{js}</body></html>"""
+<style>{card_css()}</style></head><body>
+<div class="btns no-print"><button class="btn" onclick="dl()">🖼️ PNG</button><button class="btn" onclick="window.print()">🖨️ Print / PDF</button></div>
+<div id="cap" class="card">
+<div class="band"><div><small>{esc(company).upper()}</small><h1>Resignation<br>Approval Request</h1>
+<span class="pillc" style="color:{color}">● {esc(d['status']).upper()}</span>
+<div style="font-size:12px;opacity:.9;margin-top:10px">Dear {esc(c['recipient'])},</div></div>
+<div class="prof">{img}<div><small>EMPLOYEE</small><div style="font-size:17px;font-weight:800">{esc(d['employee_name'])}</div>
+<div style="font-size:12px;opacity:.9">{esc(d['job_title'])} · {esc(d['employee_code'])}</div>
+<div style="font-size:11px;opacity:.8;margin-top:4px">{esc(d['branch'])}</div></div></div></div>
+<div class="body"><div class="tl">{tl}</div><div class="kpis">{kpi_html}</div>{warn}
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>{table}</tbody></table>
+<div class="chk"><div style="color:{P['main']};font-weight:800;font-size:13px">HANDOVER CHECKLIST · {len(c['done'])}/{len(CHECKLIST)}</div>
+<div class="prog"><i style="width:{pct}%"></i></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">{todo}</div></div>
+<div class="sig"><div>Employee</div><div>Direct Manager</div><div>HR</div></div>
+</div></div>{js}</body></html>"""
 
 
 # --------------------------------------------------------------------- app
@@ -288,7 +367,8 @@ def gate():
 
 
 init_db()
-st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
+P = PALETTES[st.session_state.get("theme", "Espresso")]
+st.markdown(f"<style>{theme_css(P)}</style>", unsafe_allow_html=True)
 gate()
 if "flash" in st.session_state:
     st.toast(st.session_state.pop("flash"))
@@ -296,12 +376,22 @@ if "flash" in st.session_state:
 with st.sidebar:
     st.header("⚙️ Settings")
     company = st.text_input("Company name", value="Company")
+    st.selectbox("🎨 Theme color", list(PALETTES), key="theme")
     st.caption("Data is stored in " + DB_PATH)
     if os.path.exists(DB_PATH):
         st.download_button("💾 Backup database", open(DB_PATH, "rb").read(), "resignations_backup.db")
 
+_all = get_all()
+_cnt = [("Total", len(_all))] + [(k, sum(1 for r in _all if r["status"] == k)) for k in STATUSES]
+st.markdown(
+    f'<div class="hero"><div><div class="hero-sub">{esc(company).upper()}</div>'
+    '<div class="hero-title">Resignation Approval System</div>'
+    '<div class="hero-note">Track, approve and archive every resignation in one place</div></div>'
+    '<div class="chips">' + "".join(f'<div class="chip"><b>{v}</b><span>{k}</span></div>' for k, v in _cnt)
+    + '</div></div>', unsafe_allow_html=True)
+
 tab_view, tab_manage, tab_dash, tab_audit = st.tabs(
-    ["🏠 عرض وطباعة الاستقالة", "📝 إضافة / تعديل / حذف", "📊 داشبورد", "🧾 Audit Log"])
+    ["📄  Requests", "✏️  Manage", "📊  Analytics", "🕘  Audit Log"])
 
 # ------------------------------------------------------------- TAB 1: view
 with tab_view:
@@ -319,6 +409,9 @@ with tab_view:
             sel = f2.selectbox("اختر الموظف:", list(labels), format_func=labels.get)
             d = get_one(sel)
             c = calc(d)
+            st.markdown(
+                f'<div class="pillrow"><span class="pill" style="background:{STATUS_COLOR[d["status"]]}">{d["status"].upper()}</span>'
+                f'<span class="meta">Last updated {esc(d["updated_at"])}</span></div>', unsafe_allow_html=True)
 
             with st.expander("✅ Decision & Handover Checklist", expanded=True):
                 k1, k2 = st.columns([1, 2])
@@ -348,7 +441,7 @@ with tab_view:
                                use_container_width=True,
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-            components.html(card_html(d, c, company), height=1050, scrolling=True)
+            components.html(card_html(d, c, company), height=1120, scrolling=True)
 
             with st.expander("📧 Send by email (Word file attached)"):
                 a, b = st.columns(2)
@@ -495,14 +588,14 @@ with tab_dash:
             st.markdown("---")
             a, b = st.columns(2)
             a.subheader("🏢 By branch")
-            a.bar_chart(df["Branch"].value_counts())
+            a.bar_chart(df["Branch"].value_counts(), color=P["main"])
             b.subheader("💡 Top reasons")
-            b.bar_chart(df["Reason"].value_counts())
+            b.bar_chart(df["Reason"].value_counts(), color=P["main"])
             c_, d_ = st.columns(2)
             c_.subheader("📈 Monthly trend")
-            c_.line_chart(df.groupby(df["Last Day"].dt.to_period("M").astype(str)).size())
+            c_.line_chart(df.groupby(df["Last Day"].dt.to_period("M").astype(str)).size(), color=P["dark"])
             d_.subheader("👔 By manager")
-            d_.bar_chart(df["Manager"].value_counts())
+            d_.bar_chart(df["Manager"].value_counts(), color=P["dark"])
             st.markdown("---")
             q = st.text_input("🔍 Search employee / branch / code").strip()
             view = df[df[["Employee", "Branch", "Code"]].apply(
