@@ -19,6 +19,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 from docx import Document
+from docx.shared import Inches
 
 DB_PATH = os.getenv("RESIGN_DB", "resignations.db")
 STATUSES = ["Pending", "Approved", "Rejected"]
@@ -28,6 +29,25 @@ CHECKLIST = ["Laptop / equipment returned", "ID badge returned", "Keys returned"
              "System access revoked", "Knowledge handover done",
              "Exit interview done", "Final dues approved by HR"]
 EARLY_LEAVER_DAYS = 90
+
+# Branch -> direct manager (edit here when something changes; "" = type the manager manually)
+BRANCH_MANAGERS = {
+    "Factory": "",
+    "CFC Branch": "Ahmed Ali",
+    "CFC Head Office": "",
+    "North Coast": "Sherif S. El-Sayed",
+    "Smouha Branch": "Mohamed Abou El-Enein",
+    "Midtown Branch": "Ahmed Ali",
+    "Almaza Branch": "Ahmed emara",
+    "Waterway Branch": "Ahmed Ali",
+    "Museum Branch": "Sherif S. El-Sayed",
+    "Khufu branch": "Sherif S. El-Sayed",
+    "Mavida Branch": "Ahmed Ali",
+    "WOC Branch": "Sherif S. El-Sayed",
+    "Poly Park Branch": "Sherif S. El-Sayed",
+    "Park-St Branch": "Sherif S. El-Sayed",
+}
+BRANCHES = list(BRANCH_MANAGERS)
 
 st.set_page_config(page_title="Resignation Approval System", page_icon="📄", layout="wide")
 
@@ -84,6 +104,12 @@ def init_db():
         checklist TEXT DEFAULT '[]', photo BLOB, created_at TEXT, updated_at TEXT)""")
     run("""CREATE TABLE IF NOT EXISTS audit(
         id INTEGER PRIMARY KEY AUTOINCREMENT, rid INTEGER, action TEXT, detail TEXT, ts TEXT)""")
+    run("""CREATE TABLE IF NOT EXISTS hires(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, recipient_name TEXT, employee_name TEXT, branch TEXT,
+        job_title TEXT, grading TEXT, hiring_date TEXT, basic_salary REAL DEFAULT 0, allowance REAL DEFAULT 0,
+        kpi_amount REAL DEFAULT 0, education TEXT, age INTEGER, address TEXT, experience TEXT,
+        direct_manager TEXT, status TEXT DEFAULT 'Pending', manager_comment TEXT,
+        checklist TEXT DEFAULT '[]', photo BLOB, created_at TEXT, updated_at TEXT)""")
     if not run("SELECT COUNT(*) n FROM resignations", fetch="one")["n"]:
         save(dict(recipient_name="Mohamed", employee_name="Abu Bakr Muhammad Mahmoud",
                   employee_code="E-1001", job_title="Sales Casual", branch="Park-St Branch",
@@ -351,6 +377,155 @@ def card_html(d, c, company):
 </div></div>{js}</body></html>"""
 
 
+# ------------------------------------------------------------- NEW HIRE APPROVAL FORM
+HIRE_CHECKLIST = ["Contract signed", "ID & documents collected", "Medical / insurance done",
+                  "Uniform / equipment issued", "System access created", "Orientation completed"]
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def hire_all():
+    return run("SELECT * FROM hires ORDER BY id DESC", fetch="all")
+
+
+def hire_one(hid):
+    return run("SELECT * FROM hires WHERE id=?", (hid,), fetch="one")
+
+
+def hire_save(rec, hid=None):
+    rec = dict(rec, updated_at=now())
+    if hid:
+        run(f"UPDATE hires SET {', '.join(c + '=?' for c in rec)} WHERE id=?", [*rec.values(), hid])
+        log(hid, "Hire edited", rec.get("employee_name", ""))
+        return hid
+    rec["created_at"] = now()
+    new = run(f"INSERT INTO hires({','.join(rec)}) VALUES({','.join('?' * len(rec))})", list(rec.values()))
+    log(new, "Hire created", rec.get("employee_name", ""))
+    return new
+
+
+def hire_calc(d):
+    rec = (d.get("recipient_name") or "").strip() or "Manager"
+    if not rec.lower().startswith(("mr.", "ms.", "mrs.")):
+        rec = f"Mr. {rec}"
+    return dict(total=(d["basic_salary"] or 0) + (d["allowance"] or 0) + (d["kpi_amount"] or 0),
+                recipient=rec, done=json.loads(d.get("checklist") or "[]"))
+
+
+def hire_rows(d, c):
+    m = lambda v: f"{(v or 0):,.0f}"
+    return [("Employee Name", d["employee_name"]), ("Branch", d["branch"]), ("Job Title", d["job_title"]),
+            ("Hiring Date", fmt(d["hiring_date"])), ("Grading System", d["grading"]),
+            ("Net Basic Salary EGP", m(d["basic_salary"])), ("Net Allowance EGP", m(d["allowance"])),
+            ("Net KPI's Amount 100% EGP", m(d["kpi_amount"])), ("Total Net to pay EGP", m(c["total"])),
+            ("Educational Qualifications", d["education"]), ("Age", d["age"]), ("Address", d["address"]),
+            ("Professional Experience", d["experience"]), ("Direct Manager", d["direct_manager"]),
+            ("Status", d["status"]), ("Manager Comment", d["manager_comment"] or "-")]
+
+
+def hire_df(rows):
+    out = []
+    for d in rows:
+        c = hire_calc(d)
+        out.append({"ID": d["id"], "Employee": d["employee_name"], "Branch": d["branch"], "Job Title": d["job_title"],
+                    "Hiring Date": d["hiring_date"], "Grading": d["grading"], "Basic (EGP)": d["basic_salary"],
+                    "Allowance (EGP)": d["allowance"], "KPI 100% (EGP)": d["kpi_amount"], "Total Net (EGP)": c["total"],
+                    "Education": d["education"], "Age": d["age"], "Manager": d["direct_manager"],
+                    "Status": d["status"], "Onboarding": f"{len(c['done'])}/{len(HIRE_CHECKLIST)}"})
+    return pd.DataFrame(out)
+
+
+def hire_docx(d, c, company):
+    doc = Document()
+    doc.add_paragraph(f"Dear {c['recipient']},")
+    doc.add_paragraph("Greetings")
+    doc.add_heading(f"{company} - New Hire Approval Form", 1)
+    if d.get("photo"):
+        try:
+            doc.add_picture(io.BytesIO(d["photo"]), width=Inches(1.5))
+        except Exception:
+            pass
+    t = doc.add_table(rows=0, cols=2)
+    t.style = "Light Grid Accent 1"
+    for k, v in hire_rows(d, c):
+        cells = t.add_row().cells
+        cells[0].text, cells[1].text = k, str(v if v is not None else "")
+    doc.add_heading("Onboarding checklist", 2)
+    for item in HIRE_CHECKLIST:
+        doc.add_paragraph(("[x] " if item in c["done"] else "[  ] ") + item)
+    doc.add_paragraph("\n\nCandidate: ______________    Direct Manager: ______________    HR: ______________")
+    bio = io.BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+
+def hire_card_html(d, c, company):
+    color = STATUS_COLOR[d["status"]]
+    if d.get("photo"):
+        mime = "image/png" if d["photo"][:4] == b"\x89PNG" else "image/jpeg"
+        img = (f'<img src="data:{mime};base64,{base64.b64encode(d["photo"]).decode()}" '
+               'style="width:100px;height:130px;object-fit:cover;border-radius:10px;border:2px solid #fff">')
+    else:
+        img = ('<div style="width:100px;height:130px;background:rgba(255,255,255,.2);border-radius:10px;'
+               'display:flex;align-items:center;justify-content:center;font-size:40px">👤</div>')
+    kpis = [("Total Net (EGP)", f"{c['total']:,.0f}"), ("Hiring Date", fmt(d["hiring_date"])),
+            ("Job Title", d["job_title"]), ("Manager", d["direct_manager"])]
+    kpi_html = "".join(f'<div class="kpi"><small>{esc(t)}</small><b>{esc(v)}</b></div>' for t, v in kpis)
+    table = "".join(f"<tr><td style='width:38%'>{esc(k)}</td><td><b>{esc(v).replace(chr(10), '<br>')}</b></td></tr>"
+                    for k, v in hire_rows(d, c))
+    todo = "".join(f"<div>{'☑' if i in c['done'] else '☐'} {esc(i)}</div>" for i in HIRE_CHECKLIST)
+    pct = int(100 * len(c["done"]) / len(HIRE_CHECKLIST))
+    js = """<script>function dl(){html2canvas(document.getElementById('cap'),{scale:2}).then(c=>{const a=document.createElement('a');
+    a.download='NewHire___NAME__.png';a.href=c.toDataURL('image/png');a.click();});}</script>""".replace(
+        "__NAME__", esc(d["employee_name"]).replace(" ", "_"))
+    return f"""<html><head><script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>{card_css()}</style></head><body>
+<div class="btns no-print"><button class="btn" onclick="dl()">🖼️ PNG</button><button class="btn" onclick="window.print()">🖨️ Print / PDF</button></div>
+<div id="cap" class="card">
+<div class="band"><div><small>{esc(company).upper()}</small><h1>New Hire<br>Approval Form</h1>
+<span class="pillc" style="color:{color}">● {esc(d['status']).upper()}</span>
+<div style="font-size:12px;opacity:.9;margin-top:10px">Dear {esc(c['recipient'])}, Greetings</div></div>
+<div class="prof">{img}<div><small>CANDIDATE</small><div style="font-size:17px;font-weight:800">{esc(d['employee_name'])}</div>
+<div style="font-size:12px;opacity:.9">{esc(d['job_title'])}</div>
+<div style="font-size:11px;opacity:.8;margin-top:4px">{esc(d['branch'])}</div></div></div></div>
+<div class="body"><div class="kpis">{kpi_html}</div>
+<table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>{table}</tbody></table>
+<div class="chk"><div style="color:{P['main']};font-weight:800;font-size:13px">ONBOARDING CHECKLIST · {len(c['done'])}/{len(HIRE_CHECKLIST)}</div>
+<div class="prog"><i style="width:{pct}%"></i></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">{todo}</div></div>
+<div class="sig"><div>Candidate</div><div>Direct Manager</div><div>HR</div></div>
+</div></div>{js}</body></html>"""
+
+
+def email_box(tag, subject, recipient, rows, attach, fname, rid, action):
+    with st.expander("📧 Send by email (Word file attached)"):
+        a, b = st.columns(2)
+        sender = a.text_input("Sender", value=secret("SMTP_USER"), key=f"{tag}_snd")
+        pwd = a.text_input("App password", type="password", value=secret("SMTP_PASS"), key=f"{tag}_pw")
+        receiver = b.text_input("Receiver", key=f"{tag}_rc")
+        host = b.text_input("SMTP host", value=secret("SMTP_HOST", "smtp.gmail.com"), key=f"{tag}_ho")
+        if st.button("🚀 Send", key=f"{tag}_go"):
+            if not (sender and pwd and receiver):
+                st.error("Please fill in sender, password and receiver.")
+                return
+            try:
+                msg = MIMEMultipart()
+                msg["Subject"], msg["From"], msg["To"] = subject, sender, receiver
+                lines = "".join(f"<p><b>{esc(k)}:</b> {esc(v)}</p>" for k, v in rows)
+                msg.attach(MIMEText(f"<h3>Dear {esc(recipient)},</h3>{lines}", "html"))
+                part = MIMEApplication(attach, Name=fname)
+                part["Content-Disposition"] = f'attachment; filename="{fname}"'
+                msg.attach(part)
+                with smtplib.SMTP(host, 587, timeout=30) as s:
+                    s.starttls()
+                    s.login(sender, pwd)
+                    s.sendmail(sender, receiver, msg.as_string())
+                log(rid, action, receiver)
+                st.success("✅ Email sent!")
+            except Exception as ex:
+                st.error(f"❌ Failed: {ex}")
+
+
 # --------------------------------------------------------------------- app
 def gate():
     pw = secret("APP_PASSWORD")
@@ -382,7 +557,8 @@ with st.sidebar:
         st.download_button("💾 Backup database", open(DB_PATH, "rb").read(), "resignations_backup.db")
 
 _all = get_all()
-_cnt = [("Total", len(_all))] + [(k, sum(1 for r in _all if r["status"] == k)) for k in STATUSES]
+_cnt = [("Resignations", len(_all))] + [(k, sum(1 for r in _all if r["status"] == k)) for k in STATUSES] \
+    + [("New Hires", len(hire_all()))]
 st.markdown(
     f'<div class="hero"><div><div class="hero-sub">{esc(company).upper()}</div>'
     '<div class="hero-title">Resignation Approval System</div>'
@@ -390,8 +566,8 @@ st.markdown(
     '<div class="chips">' + "".join(f'<div class="chip"><b>{v}</b><span>{k}</span></div>' for k, v in _cnt)
     + '</div></div>', unsafe_allow_html=True)
 
-tab_view, tab_manage, tab_dash, tab_audit = st.tabs(
-    ["📄  Requests", "✏️  Manage", "📊  Analytics", "🕘  Audit Log"])
+tab_view, tab_manage, tab_hire, tab_hmanage, tab_dash, tab_audit = st.tabs(
+    ["📄  Resignations", "✏️  Manage", "🆕  New Hires", "👤  Manage Hires", "📊  Analytics", "🕘  Audit Log"])
 
 # ------------------------------------------------------------- TAB 1: view
 with tab_view:
@@ -497,22 +673,29 @@ with tab_manage:
                  final_dues=0.0, loan_balance=0.0, other_deductions=0.0, reason="", direct_manager="",
                  notice_period="One Month", handover_status="", absence_days=0, status="Pending",
                  manager_comment="", checklist="[]", photo=None)
+        if edit and not rows:
+            st.warning("لا توجد سجلات للتعديل.")
+            edit = False
         if edit:
-            if not rows:
-                st.warning("لا توجد سجلات للتعديل.")
-                st.stop()
             rid = st.selectbox("اختر الموظف", list(labels), format_func=labels.get)
             t = get_one(rid)
         key = lambda n: f"{n}_{rid or 'new'}"
+        # Branch picker sits OUTSIDE the form so choosing a branch instantly fills the manager
+        opts = BRANCHES + ([t["branch"]] if t["branch"] and t["branch"] not in BRANCHES else [])
+        branch = st.selectbox("🏢 الفرع (Branch) *", opts, key=key("br"), placeholder="Select a branch",
+                              index=opts.index(t["branch"]) if t["branch"] in opts else None)
+        if branch and edit and branch == t["branch"] and t["direct_manager"]:
+            mgr_default = t["direct_manager"]
+        else:
+            mgr_default = BRANCH_MANAGERS.get(branch, "")
         with st.form(key("form")):
             r1, r2 = st.columns(2)
             recipient = r1.text_input("المرسل إليه (Recipient)", t["recipient_name"], key=key("rec"))
-            manager = r2.text_input("المدير المباشر (Direct Manager)", t["direct_manager"], key=key("mgr"))
+            manager = r2.text_input("المدير المباشر (Direct Manager)", mgr_default, key=key("mgr") + f"_{branch}")
             c1, c2 = st.columns(2)
             name = c1.text_input("اسم الموظف *", t["employee_name"], key=key("nm"))
             code = c1.text_input("كود الموظف (Employee Code)", t["employee_code"], key=key("cd"))
             job = c1.text_input("المسمى الوظيفي", t["job_title"], key=key("jb"))
-            branch = c1.text_input("الفرع", t["branch"], key=key("br"))
             grading = c1.text_input("الدرجة الوظيفية", t["grading"], key=key("gr"))
             reason = c1.text_input("سبب الاستقالة", t["reason"], key=key("rs"))
             hire = c2.date_input("تاريخ التعيين", D(t["hiring_date"]), key=key("hd"))
@@ -534,6 +717,8 @@ with tab_manage:
                           (name_clean, hire.isoformat(), rid), fetch="one")
                 if not name_clean:
                     st.error("Employee name is required.")
+                elif not branch:
+                    st.error("Please select a branch.")
                 elif resd < hire:
                     st.error("Resignation date can't be before the hiring date.")
                 elif last < resd:
@@ -552,6 +737,133 @@ with tab_manage:
                     if photo is not None:
                         rec["photo"] = photo.getvalue()
                     save(rec, rid)
+                    st.session_state.flash = "Saved ✅"
+                    st.rerun()
+
+# ----------------------------------------------------------- TAB: new hires (view)
+with tab_hire:
+    hrows = hire_all()
+    if not hrows:
+        st.info("No new-hire requests yet — add one in the “Manage Hires” tab.")
+    else:
+        f1, f2 = st.columns([1, 2])
+        hf = f1.multiselect("Filter by status", STATUSES, default=STATUSES, key="hf")
+        hpool = [r for r in hrows if r["status"] in hf]
+        if not hpool:
+            st.info("No records match this filter.")
+        else:
+            hl = {r["id"]: f"{r['employee_name']} — {r['branch']} [{r['status']}]" for r in hpool}
+            hs = f2.selectbox("Select candidate:", list(hl), format_func=hl.get, key="hsel")
+            hd = hire_one(hs)
+            hc = hire_calc(hd)
+            st.markdown(
+                f'<div class="pillrow"><span class="pill" style="background:{STATUS_COLOR[hd["status"]]}">{hd["status"].upper()}</span>'
+                f'<span class="meta">Last updated {esc(hd["updated_at"])}</span></div>', unsafe_allow_html=True)
+
+            with st.expander("✅ Decision & Onboarding Checklist", expanded=True):
+                k1, k2 = st.columns([1, 2])
+                ns = k1.selectbox("Decision", STATUSES, index=STATUSES.index(hd["status"]), key=f"hst_{hs}")
+                cm = k2.text_input("Manager comment", value=hd["manager_comment"] or "", key=f"hcm_{hs}")
+                dn = st.multiselect("Completed items", HIRE_CHECKLIST, default=hc["done"], key=f"hck_{hs}")
+                if st.button("💾 Save decision", type="primary", key=f"hsv_{hs}"):
+                    run("UPDATE hires SET status=?, manager_comment=?, checklist=?, updated_at=? WHERE id=?",
+                        (ns, cm, json.dumps(dn), now(), hs))
+                    log(hs, "Hire decision", f"{hd['status']} → {ns}; onboarding {len(dn)}/{len(HIRE_CHECKLIST)}")
+                    st.session_state.flash = "Decision saved ✅"
+                    st.rerun()
+
+            st.markdown("#### 📥 Export")
+            x1, x2, x3 = st.columns(3)
+            hsafe = hd["employee_name"].replace(" ", "_")
+            hword = hire_docx(hd, hc, company)
+            x1.download_button("📄 Word (.docx)", hword, f"NewHire_{hsafe}.docx", DOCX_MIME,
+                               use_container_width=True, key="hx1")
+            x2.download_button("📊 Excel (this candidate)", make_excel(hire_df([hd])), f"NewHire_{hsafe}.xlsx",
+                               XLSX_MIME, use_container_width=True, key="hx2")
+            x3.download_button("📚 Excel (all hires)", make_excel(hire_df(hrows)), "All_NewHires.xlsx",
+                               XLSX_MIME, use_container_width=True, key="hx3")
+
+            components.html(hire_card_html(hd, hc, company), height=1250, scrolling=True)
+            email_box("hmail", f"New Hire Approval Form - {hd['employee_name']}", hc["recipient"],
+                      hire_rows(hd, hc), hword, f"NewHire_{hsafe}.docx", hs, "Hire emailed")
+
+# --------------------------------------------------------- TAB: new hires (manage)
+with tab_hmanage:
+    st.subheader("⚙️ Manage new-hire requests")
+    ha = st.radio("Action", ["Add ➕", "Edit ✏️", "Delete 🗑️"], horizontal=True, key="ha")
+    hrows = hire_all()
+    hlabels = {r["id"]: f"{r['employee_name']} — {r['branch']}" for r in hrows}
+
+    if ha == "Delete 🗑️":
+        if not hrows:
+            st.warning("No new-hire requests to delete.")
+        else:
+            hdel = st.selectbox("Choose a record", list(hlabels), format_func=hlabels.get, key="hdel")
+            hsure = st.checkbox("I understand this cannot be undone", key="hsure")
+            if st.button("❌ Delete permanently", type="primary", disabled=not hsure, key="hdelbtn"):
+                run("DELETE FROM hires WHERE id=?", (hdel,))
+                log(hdel, "Hire deleted", hlabels[hdel])
+                st.session_state.flash = "Deleted"
+                st.rerun()
+    else:
+        hedit = ha == "Edit ✏️"
+        hid = None
+        t = dict(recipient_name="", employee_name="", branch="", job_title="", grading="",
+                 hiring_date=date.today(), basic_salary=0.0, allowance=0.0, kpi_amount=0.0, education="",
+                 age=21, address="", experience="", direct_manager="", status="Pending", manager_comment="",
+                 checklist="[]", photo=None)
+        if hedit and not hrows:
+            st.warning("No records to edit.")
+            hedit = False
+        if hedit:
+            hid = st.selectbox("Choose a candidate", list(hlabels), format_func=hlabels.get, key="hedit")
+            t = hire_one(hid)
+        hk = lambda n: f"h{n}_{hid or 'new'}"
+        hopts = BRANCHES + ([t["branch"]] if t["branch"] and t["branch"] not in BRANCHES else [])
+        hbranch = st.selectbox("🏢 Branch *", hopts, key=hk("br"), placeholder="Select a branch",
+                               index=hopts.index(t["branch"]) if t["branch"] in hopts else None)
+        if hbranch and hedit and hbranch == t["branch"] and t["direct_manager"]:
+            hmgr = t["direct_manager"]
+        else:
+            hmgr = BRANCH_MANAGERS.get(hbranch, "")
+        with st.form(hk("form")):
+            r1, r2 = st.columns(2)
+            h_rec = r1.text_input("Recipient (Dear Mr. …)", t["recipient_name"], key=hk("rec"))
+            h_mgr = r2.text_input("Direct Manager", hmgr, key=hk("mgr") + f"_{hbranch}")
+            c1, c2 = st.columns(2)
+            h_name = c1.text_input("Employee Name *", t["employee_name"], key=hk("nm"))
+            h_job = c1.text_input("Job Title", t["job_title"], key=hk("jb"))
+            h_grade = c1.text_input("Grading System", t["grading"], key=hk("gr"))
+            h_date = c1.date_input("Hiring Date", D(t["hiring_date"]), key=hk("hd"))
+            h_edu = c2.text_input("Educational Qualifications", t["education"], key=hk("ed"))
+            h_age = c2.number_input("Age", min_value=16, max_value=70, value=int(t["age"] or 21), step=1, key=hk("ag"))
+            h_addr = c2.text_area("Address", t["address"], height=80, key=hk("ad"))
+            h_exp = st.text_area("Professional Experience", t["experience"], height=90, key=hk("ex"))
+            s1, s2, s3 = st.columns(3)
+            h_basic = s1.number_input("Net Basic Salary EGP", value=float(t["basic_salary"] or 0), step=500.0, key=hk("bs"))
+            h_allow = s2.number_input("Net Allowance EGP", value=float(t["allowance"] or 0), step=100.0, key=hk("al"))
+            h_kpi = s3.number_input("Net KPI's Amount 100% EGP", value=float(t["kpi_amount"] or 0), step=100.0, key=hk("kp"))
+            st.caption("Total Net to pay = Basic + Allowance + KPI (calculated automatically).")
+            h_photo = st.file_uploader("🖼️ Candidate photo", type=["png", "jpg", "jpeg"], key=hk("ph"))
+            if st.form_submit_button("💾 Save", type="primary"):
+                nm = to_english_str(h_name)
+                dup = run("SELECT id FROM hires WHERE employee_name=? AND hiring_date=? AND branch=? AND id IS NOT ?",
+                          (nm, h_date.isoformat(), hbranch, hid), fetch="one")
+                if not nm:
+                    st.error("Employee name is required.")
+                elif not hbranch:
+                    st.error("Please select a branch.")
+                elif dup:
+                    st.error("This candidate already exists for the same branch and hiring date.")
+                else:
+                    rec = dict(recipient_name=to_english_str(h_rec), employee_name=nm, branch=hbranch,
+                               job_title=to_english_str(h_job), grading=to_english_str(h_grade),
+                               hiring_date=h_date.isoformat(), basic_salary=h_basic, allowance=h_allow,
+                               kpi_amount=h_kpi, education=h_edu.strip(), age=int(h_age), address=h_addr.strip(),
+                               experience=h_exp.strip(), direct_manager=to_english_str(h_mgr))
+                    if h_photo is not None:
+                        rec["photo"] = h_photo.getvalue()
+                    hire_save(rec, hid)
                     st.session_state.flash = "Saved ✅"
                     st.rerun()
 
@@ -606,6 +918,26 @@ with tab_dash:
                                "text/csv", use_container_width=True)
             x2.download_button("📥 Excel", make_excel(view), "resignations_log.xlsx", use_container_width=True,
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    hrows = hire_all()
+    if hrows:
+        st.markdown("---")
+        st.title("🆕 New hires")
+        hdf = hire_df(hrows)
+        live = hdf[hdf["Status"] != "Rejected"]
+        hm = st.columns(5)
+        hm[0].metric("Requests", len(hdf))
+        hm[1].metric("Pending", int((hdf["Status"] == "Pending").sum()))
+        hm[2].metric("Monthly cost (EGP)", f"{live['Total Net (EGP)'].sum():,.0f}")
+        hm[3].metric("Avg total net (EGP)", f"{hdf['Total Net (EGP)'].mean():,.0f}")
+        hm[4].metric("Avg age", f"{hdf['Age'].mean():.0f}")
+        h1, h2 = st.columns(2)
+        h1.subheader("🏢 Hires by branch")
+        h1.bar_chart(hdf["Branch"].value_counts(), color=P["main"])
+        h2.subheader("💼 Hires by job title")
+        h2.bar_chart(hdf["Job Title"].value_counts(), color=P["dark"])
+        st.dataframe(hdf, use_container_width=True, hide_index=True)
+        st.download_button("📥 Excel (hires)", make_excel(hdf), "newhires_log.xlsx", XLSX_MIME, key="hdl")
 
 # ------------------------------------------------------------- TAB 4: audit
 with tab_audit:
