@@ -110,14 +110,9 @@ def init_db():
         kpi_amount REAL DEFAULT 0, education TEXT, age INTEGER, address TEXT, experience TEXT,
         direct_manager TEXT, status TEXT DEFAULT 'Pending', manager_comment TEXT,
         checklist TEXT DEFAULT '[]', photo BLOB, created_at TEXT, updated_at TEXT)""")
-    if not run("SELECT COUNT(*) n FROM resignations", fetch="one")["n"]:
-        save(dict(recipient_name="Mohamed", employee_name="Abu Bakr Muhammad Mahmoud",
-                  employee_code="E-1001", job_title="Sales Casual", branch="Park-St Branch",
-                  grading="G1 - L1", hiring_date="2026-10-03", resignation_date="2026-10-20",
-                  last_working_day="2026-10-20", final_dues=7000, loan_balance=0,
-                  other_deductions=0, reason="Education", direct_manager="Sherif S. El-Sayed",
-                  notice_period="One Month", handover_status="Team Leader", absence_days=0,
-                  status="Pending", manager_comment="", checklist="[]"))
+    # remove the old demo record that earlier versions created (no sample data anymore)
+    run("DELETE FROM resignations WHERE employee_name='Abu Bakr Muhammad Mahmoud' AND employee_code='E-1001'")
+    run("DELETE FROM audit WHERE detail LIKE '%Abu Bakr Muhammad Mahmoud%'")
 
 
 def now():
@@ -526,6 +521,58 @@ def email_box(tag, subject, recipient, rows, attach, fname, rid, action):
                 st.error(f"❌ Failed: {ex}")
 
 
+# ------------------------------------------------------------- TABLE + ROW ACTIONS
+def pick_row(df, key):
+    """Searchable table with single-row selection. Returns the selected ID or None."""
+    q = st.text_input("🔍 Search", key=f"{key}_q", placeholder="Name, branch, job title ...").strip().lower()
+    if q:
+        df = df[df.apply(lambda r: q in " ".join(map(str, r.values)).lower(), axis=1)]
+    if df.empty:
+        st.info("No matching records.")
+        return None
+    ev = st.dataframe(df, hide_index=True, use_container_width=True, on_select="rerun",
+                      selection_mode="single-row", key=f"{key}_tbl")
+    idx = ev.selection.rows
+    return int(df.iloc[idx[0]]["ID"]) if idx else None
+
+
+def manage_bar(prefix, table, df, label):
+    """Table + Add / Edit / Delete buttons. Returns (selected_id, mode) where mode is None, 'add' or 'edit'."""
+    ss, mk = st.session_state, f"{prefix}_mode"
+    has = df is not None and len(df) > 0
+    picked = pick_row(df, prefix) if has else None
+    if not has:
+        st.info("No records yet — click “Add new” to create the first one.")
+    name = df.loc[df["ID"] == picked, "Employee"].iloc[0] if picked is not None else None
+    b1, b2, b3 = st.columns(3)
+    if b1.button("➕ Add new", use_container_width=True, key=f"{prefix}_badd"):
+        ss[mk] = "add"
+    if picked is None:
+        if ss.get(mk) in ("edit", "delete"):
+            ss[mk] = None
+        if has:
+            st.caption("👆 Click a row in the table to edit or delete it.")
+    else:
+        if b2.button(f"✏️ Edit · {name}", use_container_width=True, key=f"{prefix}_bedit"):
+            ss[mk] = "edit"
+        if b3.button(f"🗑️ Delete · {name}", use_container_width=True, key=f"{prefix}_bdel"):
+            ss[mk] = "delete"
+    mode = ss.get(mk)
+    if mode == "delete":
+        st.warning(f"Delete “{name}” permanently? This cannot be undone.")
+        y, n = st.columns(2)
+        if y.button("❌ Yes, delete", type="primary", use_container_width=True, key=f"{prefix}_ydel"):
+            run(f"DELETE FROM {table} WHERE id=?", (picked,))
+            log(picked, f"{label} deleted", name)
+            ss[mk], ss.flash = None, "Deleted"
+            st.rerun()
+        if n.button("Cancel", use_container_width=True, key=f"{prefix}_ndel"):
+            ss[mk] = None
+            st.rerun()
+        return picked, None
+    return picked, mode
+
+
 # --------------------------------------------------------------------- app
 def gate():
     pw = secret("APP_PASSWORD")
@@ -650,35 +697,21 @@ with tab_view:
 # ------------------------------------------------------------ TAB 2: manage
 with tab_manage:
     st.subheader("⚙️ إدارة تسجيلات الاستقالات")
-    action = st.radio("الإجراء", ["إضافة ➕", "تعديل ✏️", "حذف 🗑️"], horizontal=True)
     rows = get_all()
-    labels = {r["id"]: f"{r['employee_name']} — {r['branch']}" for r in rows}
+    rdf = to_df(rows)[["ID", "Employee", "Code", "Branch", "Job Title", "Last Day", "Net Pay (EGP)", "Status"]] if rows else None
+    picked, mode = manage_bar("r", "resignations", rdf, "Resignation")
 
-    if action == "حذف 🗑️":
-        if not rows:
-            st.warning("لا توجد استقالات.")
-        else:
-            del_id = st.selectbox("اختر السجل", list(labels), format_func=labels.get)
-            sure = st.checkbox("I understand this cannot be undone")
-            if st.button("❌ Delete permanently", type="primary", disabled=not sure):
-                run("DELETE FROM resignations WHERE id=?", (del_id,))
-                log(del_id, "Deleted", labels[del_id])
-                st.session_state.flash = "Deleted"
-                st.rerun()
-    else:
-        edit = action == "تعديل ✏️"
-        rid = None
+    if mode is not None:
+        edit = mode == "edit"
+        rid = picked if edit else None
         t = dict(recipient_name="", employee_name="", employee_code="", job_title="", branch="", grading="",
                  hiring_date=date.today(), resignation_date=date.today(), last_working_day=date.today(),
                  final_dues=0.0, loan_balance=0.0, other_deductions=0.0, reason="", direct_manager="",
                  notice_period="One Month", handover_status="", absence_days=0, status="Pending",
                  manager_comment="", checklist="[]", photo=None)
-        if edit and not rows:
-            st.warning("لا توجد سجلات للتعديل.")
-            edit = False
         if edit:
-            rid = st.selectbox("اختر الموظف", list(labels), format_func=labels.get)
             t = get_one(rid)
+        st.markdown(f"#### {'✏️ تعديل: ' + t['employee_name'] if edit else '➕ استقالة جديدة'}")
         key = lambda n: f"{n}_{rid or 'new'}"
         # Branch picker sits OUTSIDE the form so choosing a branch instantly fills the manager
         opts = BRANCHES + ([t["branch"]] if t["branch"] and t["branch"] not in BRANCHES else [])
@@ -737,6 +770,7 @@ with tab_manage:
                     if photo is not None:
                         rec["photo"] = photo.getvalue()
                     save(rec, rid)
+                    st.session_state["r_mode"] = None
                     st.session_state.flash = "Saved ✅"
                     st.rerun()
 
@@ -789,35 +823,21 @@ with tab_hire:
 
 # --------------------------------------------------------- TAB: new hires (manage)
 with tab_hmanage:
-    st.subheader("⚙️ Manage new-hire requests")
-    ha = st.radio("Action", ["Add ➕", "Edit ✏️", "Delete 🗑️"], horizontal=True, key="ha")
+    st.subheader("⚙️ إدارة طلبات التعيين")
     hrows = hire_all()
-    hlabels = {r["id"]: f"{r['employee_name']} — {r['branch']}" for r in hrows}
+    hdf_t = hire_df(hrows)[["ID", "Employee", "Branch", "Job Title", "Hiring Date", "Total Net (EGP)", "Age", "Status"]] if hrows else None
+    hpick, hmode = manage_bar("h", "hires", hdf_t, "Hire")
 
-    if ha == "Delete 🗑️":
-        if not hrows:
-            st.warning("No new-hire requests to delete.")
-        else:
-            hdel = st.selectbox("Choose a record", list(hlabels), format_func=hlabels.get, key="hdel")
-            hsure = st.checkbox("I understand this cannot be undone", key="hsure")
-            if st.button("❌ Delete permanently", type="primary", disabled=not hsure, key="hdelbtn"):
-                run("DELETE FROM hires WHERE id=?", (hdel,))
-                log(hdel, "Hire deleted", hlabels[hdel])
-                st.session_state.flash = "Deleted"
-                st.rerun()
-    else:
-        hedit = ha == "Edit ✏️"
-        hid = None
+    if hmode is not None:
+        hedit = hmode == "edit"
+        hid = hpick if hedit else None
         t = dict(recipient_name="", employee_name="", branch="", job_title="", grading="",
                  hiring_date=date.today(), basic_salary=0.0, allowance=0.0, kpi_amount=0.0, education="",
                  age=21, address="", experience="", direct_manager="", status="Pending", manager_comment="",
                  checklist="[]", photo=None)
-        if hedit and not hrows:
-            st.warning("No records to edit.")
-            hedit = False
         if hedit:
-            hid = st.selectbox("Choose a candidate", list(hlabels), format_func=hlabels.get, key="hedit")
             t = hire_one(hid)
+        st.markdown(f"#### {'✏️ Edit: ' + t['employee_name'] if hedit else '➕ New hire request'}")
         hk = lambda n: f"h{n}_{hid or 'new'}"
         hopts = BRANCHES + ([t["branch"]] if t["branch"] and t["branch"] not in BRANCHES else [])
         hbranch = st.selectbox("🏢 Branch *", hopts, key=hk("br"), placeholder="Select a branch",
@@ -864,6 +884,7 @@ with tab_hmanage:
                     if h_photo is not None:
                         rec["photo"] = h_photo.getvalue()
                     hire_save(rec, hid)
+                    st.session_state["h_mode"] = None
                     st.session_state.flash = "Saved ✅"
                     st.rerun()
 
