@@ -110,6 +110,8 @@ def init_db():
         kpi_amount REAL DEFAULT 0, education TEXT, age INTEGER, address TEXT, experience TEXT,
         direct_manager TEXT, status TEXT DEFAULT 'Pending', manager_comment TEXT,
         checklist TEXT DEFAULT '[]', photo BLOB, created_at TEXT, updated_at TEXT)""")
+    if "docs" not in [r["name"] for r in run("PRAGMA table_info(hires)", fetch="all")]:
+        run("ALTER TABLE hires ADD COLUMN docs TEXT DEFAULT '{}'")
     # remove the old demo record that earlier versions created (no sample data anymore)
     run("DELETE FROM resignations WHERE employee_name='Abu Bakr Muhammad Mahmoud' AND employee_code='E-1001'")
     run("DELETE FROM audit WHERE detail LIKE '%Abu Bakr Muhammad Mahmoud%'")
@@ -573,6 +575,71 @@ def manage_bar(prefix, table, df, label):
     return picked, mode
 
 
+# ------------------------------------------------------------- EMPLOYEE FILE (مسوغات التعيين)
+FILE_DOCS = [  # first ESSENTIAL items are mandatory, the rest are extras
+    "أصل شهادة الميلاد", "أصل شهادة المؤهل الدراسي", "أصل شهادة الخدمة العسكرية",
+    "فيش حديث باسم الشركة (موجو للصناعات الغذائية)", "صورة كعب عمل", "عدد (2) صورة بطاقة شخصية",
+    "عدد (6) صور شخصية حديثة", "شهادة صحية", "استمارة (6)", "برنت تأميني",
+    "استمارة (1) تأمينات", "عقد عمل", "صورة كارنيه النقابة", "صورة من الرخصة", "نموذج 111", "أخرى"]
+ESSENTIAL = 10
+DOC_OK, DOC_NO = "موجود", "غير موجود"
+
+DOCS_CSS = """
+body{font-family:'Cairo','Inter',sans-serif}
+th,td{text-align:center}td.nm{text-align:right;font-weight:700}
+td.ck{font-size:17px;color:#2E7D32;font-weight:800}td.no{color:#B3261E}
+td.sep{background:__M__!important;color:#fff;font-weight:800;letter-spacing:.04em}
+"""
+
+
+def docs_load(d):
+    saved = json.loads(d.get("docs") or "{}")
+    return [{"s": saved.get(str(i), {}).get("s", ""), "n": saved.get(str(i), {}).get("n", "")}
+            for i in range(len(FILE_DOCS))]
+
+
+def docs_card_html(d, rows, company):
+    if d.get("photo"):
+        mime = "image/png" if d["photo"][:4] == b"\x89PNG" else "image/jpeg"
+        img = (f'<img src="data:{mime};base64,{base64.b64encode(d["photo"]).decode()}" '
+               'style="width:100px;height:130px;object-fit:cover;border-radius:10px;border:2px solid #fff">')
+    else:
+        img = ('<div style="width:100px;height:130px;background:rgba(255,255,255,.2);border-radius:10px;'
+               'display:flex;align-items:center;justify-content:center;font-size:40px">👤</div>')
+    ok = sum(1 for r in rows[:ESSENTIAL] if r["s"] == DOC_OK)
+    extra = sum(1 for r in rows[ESSENTIAL:] if r["s"] == DOC_OK)
+    pct = int(100 * ok / ESSENTIAL)
+    trs = []
+    for i, name in enumerate(FILE_DOCS):
+        r = rows[i]
+        if i == ESSENTIAL:
+            trs.append('<tr><td colspan="5" class="sep">مرفقات إضافية</td></tr>')
+        yes = "✔" if r["s"] == DOC_OK else ""
+        no = "✘" if r["s"] == DOC_NO else ""
+        trs.append(f'<tr><td>{i + 1}</td><td class="nm">{esc(name)}</td><td class="ck">{yes}</td>'
+                   f'<td class="ck no">{no}</td><td>{esc(r["n"])}</td></tr>')
+    js = """<script>function dl(){html2canvas(document.getElementById('cap'),{scale:2}).then(c=>{const a=document.createElement('a');
+    a.download='File___NAME__.png';a.href=c.toDataURL('image/png');a.click();});}</script>""".replace(
+        "__NAME__", esc(d["employee_name"]).replace(" ", "_"))
+    return f"""<html dir="rtl"><head><script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800&display=swap" rel="stylesheet">
+<style>{card_css()}{_tok(DOCS_CSS, P)}</style></head><body>
+<div class="btns no-print" style="direction:ltr"><button class="btn" onclick="dl()">🖼️ PNG</button><button class="btn" onclick="window.print()">🖨️ Print / PDF</button></div>
+<div id="cap" class="card">
+<div class="band"><div><small>{esc(company).upper()}</small><h1>حافظة ملف الموظف<br>ومسوغات التعيين</h1>
+<span class="pillc" style="color:{P['main']}">الأساسية {ok}/{ESSENTIAL} · الإضافية {extra}</span></div>
+<div class="prof">{img}<div><small>الموظف</small><div style="font-size:17px;font-weight:800">{esc(d['employee_name'])}</div>
+<div style="font-size:12px;opacity:.9">{esc(d['job_title'])}</div>
+<div style="font-size:12px;opacity:.9">{esc(d['branch'])}</div>
+<div style="font-size:12px;margin-top:4px">تاريخ التعيين: {fmt(d['hiring_date'])}</div></div></div></div>
+<div class="body"><div style="font-weight:800;font-size:13px;color:{P['main']}">اكتمال المسوغات الأساسية {pct}%</div>
+<div class="prog"><i style="width:{pct}%"></i></div>
+<table><thead><tr><th style="width:36px">م</th><th>المرفق</th><th style="width:70px">موجود</th>
+<th style="width:80px">غير موجود</th><th style="width:30%">ملاحظات</th></tr></thead><tbody>{''.join(trs)}</tbody></table>
+<div class="sig"><div>الموظف</div><div>مسؤول التعيين</div><div>الموارد البشرية</div></div>
+</div></div>{js}</body></html>"""
+
+
 # --------------------------------------------------------------------- app
 def gate():
     pw = secret("APP_PASSWORD")
@@ -613,8 +680,9 @@ st.markdown(
     '<div class="chips">' + "".join(f'<div class="chip"><b>{v}</b><span>{k}</span></div>' for k, v in _cnt)
     + '</div></div>', unsafe_allow_html=True)
 
-tab_view, tab_manage, tab_hire, tab_hmanage, tab_dash, tab_audit = st.tabs(
-    ["📄  Resignations", "✏️  Manage", "🆕  New Hires", "👤  Manage Hires", "📊  Analytics", "🕘  Audit Log"])
+tab_view, tab_manage, tab_hire, tab_hmanage, tab_file, tab_dash, tab_audit = st.tabs(
+    ["📄  Resignations", "✏️  Manage", "🆕  New Hires", "👤  Manage Hires", "🗂️  Employee File",
+     "📊  Analytics", "🕘  Audit Log"])
 
 # ------------------------------------------------------------- TAB 1: view
 with tab_view:
@@ -887,6 +955,49 @@ with tab_hmanage:
                     st.session_state["h_mode"] = None
                     st.session_state.flash = "Saved ✅"
                     st.rerun()
+
+# ------------------------------------------------------- TAB: employee file (مسوغات التعيين)
+with tab_file:
+    frows = hire_all()
+    if not frows:
+        st.info("أضف طلب تعيين أولًا من تبويب Manage Hires، وبعدها تظهر حافظة ملفه هنا.")
+    else:
+        fl = {r["id"]: f"{r['employee_name']} — {r['branch']}" for r in frows}
+        fid = st.selectbox("اختر الموظف", list(fl), format_func=fl.get, key="fsel")
+        fd = hire_one(fid)
+        cur = docs_load(fd)
+        base = pd.DataFrame({
+            "م": range(1, len(FILE_DOCS) + 1), "المرفق": FILE_DOCS,
+            "النوع": ["أساسي"] * ESSENTIAL + ["إضافي"] * (len(FILE_DOCS) - ESSENTIAL),
+            "الحالة": [r["s"] or None for r in cur], "ملاحظات": [r["n"] for r in cur]})
+        st.caption(f"تاريخ التعيين: {fmt(fd['hiring_date'])} · الفرع: {fd['branch']} · الصورة تُسحب تلقائيًا من طلب التعيين")
+        edited = st.data_editor(
+            base, hide_index=True, use_container_width=True, disabled=["م", "المرفق", "النوع"], key=f"fed_{fid}",
+            column_config={"الحالة": st.column_config.SelectboxColumn("الحالة", options=[DOC_OK, DOC_NO]),
+                           "ملاحظات": st.column_config.TextColumn("ملاحظات")})
+        clean = lambda v: "" if v is None or (isinstance(v, float) and v != v) else str(v)
+        live = [{"s": clean(edited.iloc[i]["الحالة"]), "n": clean(edited.iloc[i]["ملاحظات"])} for i in range(len(FILE_DOCS))]
+        ok = sum(1 for r in live[:ESSENTIAL] if r["s"] == DOC_OK)
+        missing = [FILE_DOCS[i] for i in range(ESSENTIAL) if live[i]["s"] != DOC_OK]
+        m1, m2 = st.columns(2)
+        m1.metric("المسوغات الأساسية", f"{ok} / {ESSENTIAL}")
+        m2.metric("المرفقات الإضافية", sum(1 for r in live[ESSENTIAL:] if r["s"] == DOC_OK))
+        if missing:
+            st.warning("ناقص من الأساسيات: " + " · ".join(missing))
+        else:
+            st.success("✅ كل المسوغات الأساسية مكتملة")
+        b1, b2 = st.columns(2)
+        if b1.button("💾 حفظ الحافظة", type="primary", use_container_width=True, key=f"fsv_{fid}"):
+            payload = {str(i): live[i] for i in range(len(FILE_DOCS))}
+            run("UPDATE hires SET docs=?, updated_at=? WHERE id=?", (json.dumps(payload, ensure_ascii=False), now(), fid))
+            log(fid, "File saved", f"{fd['employee_name']} · essentials {ok}/{ESSENTIAL}")
+            st.session_state.flash = "تم حفظ الحافظة ✅"
+            st.rerun()
+        xl = pd.DataFrame({"م": base["م"], "المرفق": base["المرفق"], "النوع": base["النوع"],
+                           "الحالة": [r["s"] for r in live], "ملاحظات": [r["n"] for r in live]})
+        b2.download_button("📊 Excel", make_excel(xl), f"File_{fd['employee_name'].replace(' ', '_')}.xlsx",
+                           XLSX_MIME, use_container_width=True, key=f"fx_{fid}")
+        components.html(docs_card_html(fd, live, company), height=1300, scrolling=True)
 
 # ----------------------------------------------------------- TAB 3: dashboard
 with tab_dash:
